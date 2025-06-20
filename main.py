@@ -16,6 +16,11 @@ import json
 from urllib.parse import urlparse
 import subprocess
 import sys
+import warnings
+
+# Suppress SSL warnings for intentional unverified requests
+from urllib3.exceptions import InsecureRequestWarning
+warnings.filterwarnings('ignore', category=InsecureRequestWarning)
 
 class WebsiteVerificationTool:
     def __init__(self, root):
@@ -487,7 +492,7 @@ class WebsiteVerificationTool:
         try:
             print(f"Scanning website: {url}")
             
-            # Get previous scan for comparison
+            # Get previous scan for comparison with debug info
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             cursor.execute('''
@@ -502,26 +507,45 @@ class WebsiteVerificationTool:
             previous_registrar = previous_scan[2] if previous_scan else None
             previous_additional = previous_scan[3] if previous_scan else None
             
-            # Get previous content length for comparison
+            # Get previous content length and normalized length for comparison
             previous_content_length = None
+            previous_normalized_length = None
             if previous_additional:
                 try:
                     prev_checks = json.loads(previous_additional)
                     previous_content_length = prev_checks.get('content_length')
+                    previous_normalized_length = prev_checks.get('normalized_length')
                 except:
                     pass
             
-            print(f"Previous hash for {url}: {previous_hash}")
+            print(f"Scanning {url}:")
+            print(f"  Previous hash: {previous_hash}")
+            print(f"  Previous content length: {previous_content_length}")
+            print(f"  Previous normalized length: {previous_normalized_length}")
             
             # Perform checks
             scan_result = self.perform_website_checks(url)
             scan_result['website_id'] = website_id
             
-            # Enhanced change detection with validation
             current_hash = scan_result.get('source_code_hash', '')
+            current_content_length = scan_result.get('additional_checks', {}).get('content_length')
+            current_normalized_length = scan_result.get('additional_checks', {}).get('normalized_length')
+            
+            print(f"  Current hash: {current_hash}")
+            print(f"  Current content length: {current_content_length}")
+            print(f"  Current normalized length: {current_normalized_length}")
+            
+            # Debug content changes if hashes differ
+            if previous_hash and current_hash and previous_hash != current_hash:
+                self.debug_content_changes(
+                    url, previous_hash, current_hash,
+                    None,  # We don't store previous content, just lengths
+                    scan_result.get('normalized_content', '')
+                )
+            
+            # Enhanced change detection with validation
             current_title = scan_result.get('page_title', '')
             current_registrar = scan_result.get('registrar', '')
-            current_content_length = scan_result.get('additional_checks', {}).get('content_length')
             
             changes_detected = False
             change_details = []
@@ -530,37 +554,44 @@ class WebsiteVerificationTool:
             if previous_hash and current_hash:
                 content_changed = self.calculate_content_similarity(
                     previous_hash, current_hash, 
-                    previous_content_length, current_content_length
+                    previous_normalized_length or previous_content_length, 
+                    current_normalized_length or current_content_length
                 )
                 if content_changed:
                     changes_detected = True
-                    change_details.append('Significant content changed')
-                    print(f"Significant content change detected for {url}")
+                    
+                    # Calculate change percentage for details
+                    if previous_content_length and current_content_length:
+                        change_pct = abs(current_content_length - previous_content_length) / previous_content_length * 100
+                        change_details.append(f'Significant content changed ({change_pct:.1f}% size change)')
+                    else:
+                        change_details.append('Significant content changed')
+                    
+                    print(f"  ✓ Significant content change flagged")
                 elif previous_hash != current_hash:
-                    print(f"Minor content change ignored for {url} (likely dynamic content)")
+                    print(f"  ○ Minor content change ignored (likely dynamic content)")
             
             # Check title change (only if substantially different)
             if previous_title and current_title:
-                if previous_title.strip() != current_title.strip():
-                    # Only flag if title change is significant (not just whitespace/formatting)
-                    title_diff = abs(len(previous_title) - len(current_title))
-                    if title_diff > 5 or not self.titles_similar(previous_title, current_title):
-                        changes_detected = True
-                        change_details.append(f'Title changed: "{previous_title}" -> "{current_title}"')
-                        print(f"Significant title change detected for {url}")
+                if not self.titles_similar(previous_title, current_title):
+                    changes_detected = True
+                    change_details.append(f'Title changed: "{previous_title}" -> "{current_title}"')
+                    print(f"  ✓ Significant title change flagged")
+                elif previous_title != current_title:
+                    print(f"  ○ Minor title change ignored")
             
             # Check registrar change (this is always significant)
             if previous_registrar and current_registrar:
-                if previous_registrar != current_registrar and current_registrar != 'Unknown':
+                if previous_registrar != current_registrar and current_registrar not in ['Unknown', 'Whois lookup failed']:
                     changes_detected = True
                     change_details.append(f'Registrar changed: {previous_registrar} -> {current_registrar}')
-                    print(f"Registrar change detected for {url}")
+                    print(f"  ✓ Registrar change flagged")
             
             scan_result['changes_detected'] = changes_detected
             if change_details:
                 scan_result['additional_checks']['change_details'] = '; '.join(change_details)
             
-            print(f"Final change status for {url}: {changes_detected}")
+            print(f"  Final result: {'CHANGES DETECTED' if changes_detected else 'NO SIGNIFICANT CHANGES'}")
             
             # Calculate risk score
             risk_score = self.calculate_risk_score(scan_result)
@@ -831,15 +862,45 @@ class WebsiteVerificationTool:
         if old_hash == new_hash:
             return False  # No change
         
-        # If content length changed dramatically (>20%), likely significant
+        # If content length is very similar (within 5%), likely not significant
         if old_content_length and new_content_length:
             length_change_percent = abs(new_content_length - old_content_length) / old_content_length * 100
-            if length_change_percent > 20:
+            
+            # If content length changed by less than 5%, it's likely just dynamic content
+            if length_change_percent < 5:
+                print(f"Content length change too small to be significant: {length_change_percent:.1f}%")
+                return False
+            
+            # If content length changed dramatically (>30%), likely significant
+            if length_change_percent > 30:
+                print(f"Significant content length change detected: {length_change_percent:.1f}%")
                 return True
         
-        # For now, if hashes are different, consider it a change
-        # But we could add more sophisticated similarity checks here
+        # For moderate changes (5-30%), we need additional validation
+        # This is where we could add more sophisticated checks in the future
+        print(f"Moderate content change detected - treating as significant for now")
         return True
+    
+    def debug_content_changes(self, url, old_hash, new_hash, old_content, new_content):
+        """Debug function to help understand what's changing in content"""
+        if old_hash == new_hash:
+            print(f"DEBUG: No content changes for {url}")
+            return
+        
+        print(f"DEBUG: Content change detected for {url}")
+        print(f"  Old hash: {old_hash}")
+        print(f"  New hash: {new_hash}")
+        print(f"  Old content length: {len(old_content) if old_content else 'N/A'}")
+        print(f"  New content length: {len(new_content) if new_content else 'N/A'}")
+        
+        # Sample comparison of first 200 characters
+        if old_content and new_content:
+            old_sample = old_content[:200].replace('\n', '\\n').replace('\r', '\\r')
+            new_sample = new_content[:200].replace('\n', '\\n').replace('\r', '\\r')
+            print(f"  Old content start: {old_sample}")
+            print(f"  New content start: {new_sample}")
+        
+        print("  " + "="*50)
     
     def additional_security_checks(self, url, domain):
         """Additional security and legitimacy checks"""
