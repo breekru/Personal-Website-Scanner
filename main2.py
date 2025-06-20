@@ -96,7 +96,7 @@ class WebsiteVerificationTool:
         cursor.execute("SELECT key, value FROM settings")
         settings_data = dict(cursor.fetchall())
         
-        # Default settings
+        # Default settings - UPDATED to include retry settings
         defaults = {
             'email_smtp_server': 'smtp.gmail.com',
             'email_smtp_port': '587',
@@ -104,13 +104,15 @@ class WebsiteVerificationTool:
             'email_password': '',
             'notification_emails': '',
             'scan_frequency_days': '7',
-            'github_repo': ''
+            'github_repo': '',
+            'scan_retries': '5',  # NEW: Default 5 retries
+            'retry_delay_seconds': '3'  # NEW: Default 3 second delay
         }
         
         for key, default_value in defaults.items():
             if key not in settings_data:
                 cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", 
-                             (key, default_value))
+                            (key, default_value))
                 settings_data[key] = default_value
         
         conn.commit()
@@ -329,7 +331,7 @@ class WebsiteVerificationTool:
         self.notification_emails_entry.insert(0, self.settings.get('notification_emails', ''))
         self.notification_emails_entry.grid(row=2, column=1, columnspan=2, padx=5)
         
-        # Scan settings
+        # Scan settings - UPDATED to include retry settings
         scan_frame = ttk.LabelFrame(self.settings_frame, text="Scan Settings", padding=10)
         scan_frame.pack(fill=tk.X, padx=10, pady=10)
         
@@ -337,6 +339,17 @@ class WebsiteVerificationTool:
         self.scan_frequency_entry = ttk.Entry(scan_frame, width=10)
         self.scan_frequency_entry.insert(0, self.settings.get('scan_frequency_days', '7'))
         self.scan_frequency_entry.grid(row=0, column=1, padx=5)
+        
+        # NEW: Retry settings
+        ttk.Label(scan_frame, text="Scan Retries:").grid(row=0, column=2, sticky='w', padx=(20, 0))
+        self.scan_retries_entry = ttk.Entry(scan_frame, width=10)
+        self.scan_retries_entry.insert(0, self.settings.get('scan_retries', '5'))
+        self.scan_retries_entry.grid(row=0, column=3, padx=5)
+        
+        ttk.Label(scan_frame, text="Retry Delay (seconds):").grid(row=1, column=0, sticky='w')
+        self.retry_delay_entry = ttk.Entry(scan_frame, width=10)
+        self.retry_delay_entry.insert(0, self.settings.get('retry_delay_seconds', '3'))
+        self.retry_delay_entry.grid(row=1, column=1, padx=5)
         
         # GitHub settings
         github_frame = ttk.LabelFrame(self.settings_frame, text="GitHub Integration", padding=10)
@@ -352,6 +365,7 @@ class WebsiteVerificationTool:
         
         # Save button
         ttk.Button(self.settings_frame, text="Save Settings", command=self.save_settings).pack(pady=20)
+
     
     def setup_reports_tab(self):
         # Report generation
@@ -746,6 +760,86 @@ class WebsiteVerificationTool:
                 pass
             return None
 
+    def scan_website_with_retries(self, website_id, url):
+        """Perform website scan with configurable retry logic"""
+        import time
+        
+        max_retries = int(self.settings.get('scan_retries', 5))
+        retry_delay = int(self.settings.get('retry_delay_seconds', 3))
+        
+        print(f"Starting scan for {url} (max retries: {max_retries}, delay: {retry_delay}s)")
+        
+        last_error = None
+        
+        for attempt in range(max_retries + 1):  # +1 because we want initial attempt + retries
+            try:
+                if attempt > 0:
+                    print(f"  Retry attempt {attempt}/{max_retries} for {url}")
+                    time.sleep(retry_delay)
+                else:
+                    print(f"  Initial scan attempt for {url}")
+                
+                # Call the original scan method
+                result = self.scan_website(website_id, url)
+                
+                if result is not None:
+                    # Check if scan was successful (no major errors)
+                    additional_checks = result.get('additional_checks', {})
+                    
+                    # Define what constitutes a "retry-worthy" error
+                    retry_worthy_errors = ['scan_error', 'http_error', 'ssl_error']
+                    has_retry_worthy_error = any(error in additional_checks for error in retry_worthy_errors)
+                    
+                    # If no retry-worthy errors, consider it successful
+                    if not has_retry_worthy_error:
+                        if attempt > 0:
+                            print(f"  ✓ Scan succeeded on retry attempt {attempt} for {url}")
+                        else:
+                            print(f"  ✓ Scan succeeded on first attempt for {url}")
+                        return result
+                    else:
+                        # Log the error but continue to retry
+                        error_details = [f"{k}: {v}" for k, v in additional_checks.items() if k in retry_worthy_errors]
+                        print(f"  ⚠ Scan completed with errors on attempt {attempt + 1}: {'; '.join(error_details)}")
+                        last_error = f"Scan errors: {'; '.join(error_details)}"
+                        
+                        # If this was our last attempt, we'll save this result anyway
+                        if attempt == max_retries:
+                            print(f"  ✗ Max retries reached for {url}, saving last result with errors")
+                            return result
+                else:
+                    # Scan returned None (complete failure)
+                    last_error = "Scan returned None - complete failure"
+                    print(f"  ✗ Complete scan failure on attempt {attempt + 1} for {url}")
+                    
+            except Exception as e:
+                last_error = str(e)
+                print(f"  ✗ Exception on attempt {attempt + 1} for {url}: {last_error}")
+                
+                # If this was our last attempt, save the error
+                if attempt == max_retries:
+                    print(f"  ✗ Max retries reached for {url}, saving error result")
+                    try:
+                        conn = sqlite3.connect(self.db_path)
+                        cursor = conn.cursor()
+                        cursor.execute('''
+                            INSERT INTO scan_results 
+                            (website_id, additional_checks)
+                            VALUES (?, ?)
+                        ''', (website_id, json.dumps({
+                            'scan_error': f'Failed after {max_retries} retries: {last_error}',
+                            'retry_attempts': max_retries,
+                            'final_error': last_error
+                        })))
+                        conn.commit()
+                        conn.close()
+                    except Exception as db_error:
+                        print(f"  ✗ Failed to save error result: {db_error}")
+                    return None
+        
+        # This should never be reached, but just in case
+        print(f"  ✗ Unexpected end of retry loop for {url}")
+        return None
 
     def send_change_notification(self, url, scan_result, change_details):
         """Send notification about detected changes (only for moderate/major changes)"""
@@ -1306,7 +1400,7 @@ class WebsiteVerificationTool:
         return min(score, 100)  # Cap at 100
     
     def scan_all_websites(self):
-        """Scan all websites in separate thread"""
+        """Scan all websites in separate thread with retry logic"""
         def scan_thread():
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
@@ -1314,38 +1408,43 @@ class WebsiteVerificationTool:
             websites = cursor.fetchall()
             conn.close()
             
-            for website_id, url in websites:
-                result = self.scan_website(website_id, url)
+            total_websites = len(websites)
+            for i, (website_id, url) in enumerate(websites, 1):
+                print(f"\n--- Scanning {i}/{total_websites}: {url} ---")
+                result = self.scan_website_with_retries(website_id, url)  # Use retry method
                 # Update UI in main thread after each scan
                 self.root.after(0, self.load_websites)
                 self.root.after(0, self.load_scan_results)
             
-            self.root.after(0, lambda: messagebox.showinfo("Complete", "All websites scanned"))
+            self.root.after(0, lambda: messagebox.showinfo("Complete", f"All {total_websites} websites scanned with retry logic"))
         
         threading.Thread(target=scan_thread, daemon=True).start()
-        messagebox.showinfo("Scanning", "Scanning all websites in background...")
-    
+        messagebox.showinfo("Scanning", f"Scanning all websites with up to {self.settings.get('scan_retries', 5)} retries each...")
+
+        
     def scan_selected(self):
-        """Scan selected websites"""
+        """Scan selected websites with retry logic"""
         selection = self.websites_tree.selection()
         if not selection:
             messagebox.showwarning("Warning", "Please select websites to scan")
             return
         
         def scan_thread():
-            for item in selection:
+            total_selected = len(selection)
+            for i, item in enumerate(selection, 1):
                 values = self.websites_tree.item(item)['values']
                 website_id, url = values[0], values[2]
-                self.scan_website(website_id, url)
+                print(f"\n--- Scanning {i}/{total_selected}: {url} ---")
+                self.scan_website_with_retries(website_id, url)  # Use retry method
                 # Update UI after each scan
                 self.root.after(0, self.load_websites)
                 self.root.after(0, self.load_scan_results)
             
-            self.root.after(0, lambda: messagebox.showinfo("Complete", "Selected websites scanned"))
+            self.root.after(0, lambda: messagebox.showinfo("Complete", f"Selected {total_selected} websites scanned with retry logic"))
         
         threading.Thread(target=scan_thread, daemon=True).start()
-        messagebox.showinfo("Scanning", "Scanning selected websites...")
-    
+        messagebox.showinfo("Scanning", f"Scanning selected websites with up to {self.settings.get('scan_retries', 5)} retries each...")    
+        
     def delete_selected(self):
         """Delete selected websites"""
         selection = self.websites_tree.selection()
@@ -1518,8 +1617,27 @@ Additional Checks: {scan[12]}
             'email_password': self.email_password_entry.get(),
             'notification_emails': self.notification_emails_entry.get(),
             'scan_frequency_days': self.scan_frequency_entry.get(),
-            'github_repo': self.github_repo_entry.get()
+            'github_repo': self.github_repo_entry.get(),
+            'scan_retries': self.scan_retries_entry.get(),  # NEW
+            'retry_delay_seconds': self.retry_delay_entry.get()  # NEW
         }
+        
+        # Validate retry settings
+        try:
+            retries = int(settings_to_save['scan_retries'])
+            delay = int(settings_to_save['retry_delay_seconds'])
+            
+            if retries < 0 or retries > 20:
+                messagebox.showerror("Error", "Scan retries must be between 0 and 20")
+                return
+            
+            if delay < 1 or delay > 60:
+                messagebox.showerror("Error", "Retry delay must be between 1 and 60 seconds")
+                return
+                
+        except ValueError:
+            messagebox.showerror("Error", "Retry settings must be valid numbers")
+            return
         
         for key, value in settings_to_save.items():
             self.save_setting(key, value)
