@@ -126,6 +126,43 @@ class WebsiteVerificationTool:
         conn.close()
         self.settings[key] = value
     
+    def analyze_content_changes(self, old_hash, new_hash, old_length, new_length, old_norm_length, new_norm_length):
+        """Analyze content changes and categorize them"""
+        
+        # If hashes are the same, no change
+        if old_hash == new_hash:
+            return {'has_changes': False, 'change_type': 'none', 'change_pct': 0}
+        
+        # If we don't have length data, assume it's significant
+        if not old_length or not new_length:
+            print(f"    No length data available - treating as significant")
+            return {'has_changes': True, 'change_type': 'significant', 'change_pct': None}
+        
+        # Calculate percentage change in content length
+        length_change_pct = abs(new_length - old_length) / old_length * 100
+        
+        # Use normalized length if available for better comparison
+        norm_change_pct = None
+        if old_norm_length and new_norm_length:
+            norm_change_pct = abs(new_norm_length - old_norm_length) / old_norm_length * 100
+            print(f"    Normalized content change: {norm_change_pct:.1f}%")
+        
+        print(f"    Raw content length change: {length_change_pct:.1f}%")
+        
+        # Use the better metric for classification
+        primary_change_pct = norm_change_pct if norm_change_pct is not None else length_change_pct
+        
+        # Categorize changes
+        if primary_change_pct < 2:
+            print(f"    Minor/informational change detected ({primary_change_pct:.1f}%)")
+            return {'has_changes': True, 'change_type': 'informational', 'change_pct': primary_change_pct}
+        elif primary_change_pct > 15:
+            print(f"    Major change detected ({primary_change_pct:.1f}%) - high priority")
+            return {'has_changes': True, 'change_type': 'major', 'change_pct': primary_change_pct}
+        else:
+            print(f"    Moderate change detected ({primary_change_pct:.1f}%) - medium priority")
+            return {'has_changes': True, 'change_type': 'moderate', 'change_pct': primary_change_pct}
+
     def setup_ui(self):
         # Create notebook for tabs
         self.notebook = ttk.Notebook(self.root)
@@ -183,22 +220,23 @@ class WebsiteVerificationTool:
         list_frame = ttk.LabelFrame(self.websites_frame, text="Monitored Websites", padding=10)
         list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
         
-        # Treeview for websites with comprehensive columns
-        columns = ('ID', 'Name', 'URL', 'Last Checked', 'Status Code', 'SSL', 'Registrar', 'Changes', 'Risk Score', 'Issues')
+        # Treeview for websites with comprehensive columns - UPDATED to include Domain Age
+        columns = ('ID', 'Name', 'URL', 'Last Checked', 'Status Code', 'SSL', 'Registrar', 'Domain Age', 'Changes', 'Risk Score', 'Issues')
         self.websites_tree = ttk.Treeview(list_frame, columns=columns, show='headings', selectmode='extended')
         
-        # Configure column widths and headings
+        # Configure column widths and headings - UPDATED to include Domain Age
         column_configs = {
             'ID': 40,
             'Name': 150,
-            'URL': 250,
-            'Last Checked': 120,
+            'URL': 220,  # Slightly reduced to make room
+            'Last Checked': 110,  # Slightly reduced
             'Status Code': 80,
             'SSL': 60,
-            'Registrar': 120,
+            'Registrar': 110,  # Slightly reduced
+            'Domain Age': 90,  # NEW COLUMN
             'Changes': 70,
             'Risk Score': 80,
-            'Issues': 200
+            'Issues': 180  # Slightly reduced
         }
         
         for col in columns:
@@ -219,6 +257,7 @@ class WebsiteVerificationTool:
         
         # Bind double-click to view details
         self.websites_tree.bind('<Double-1>', self.view_website_details)
+
     
     def setup_results_tab(self):
         # Filter frame
@@ -356,7 +395,7 @@ class WebsiteVerificationTool:
             messagebox.showerror("Error", "Website already exists in database")
     
     def load_websites(self):
-        """Load websites into the treeview with comprehensive information"""
+        """Load websites into the treeview with comprehensive information including domain age"""
         for item in self.websites_tree.get_children():
             self.websites_tree.delete(item)
         
@@ -374,7 +413,7 @@ class WebsiteVerificationTool:
             # Get the most recent scan result for this specific website
             cursor.execute('''
                 SELECT status_code, ssl_valid, registrar, changes_detected, 
-                       risk_score, additional_checks
+                    risk_score, additional_checks
                 FROM scan_results 
                 WHERE website_id = ? 
                 ORDER BY scan_date DESC 
@@ -410,6 +449,34 @@ class WebsiteVerificationTool:
                 registrar_display = 'Unknown'
             else:
                 registrar_display = 'Not Scanned'
+            
+            # Domain Age display - NEW LOGIC
+            domain_age_display = 'Not Scanned'
+            if additional_checks and additional_checks != '{}':
+                try:
+                    checks = json.loads(additional_checks) if isinstance(additional_checks, str) else additional_checks
+                    domain_age_days = checks.get('domain_age_days')
+                    
+                    if domain_age_days is not None:
+                        if domain_age_days < 30:
+                            domain_age_display = f"{domain_age_days}d ⚠️"  # Warning for new domains
+                        elif domain_age_days < 365:
+                            domain_age_display = f"{domain_age_days}d"
+                        elif domain_age_days < 3650:  # Less than 10 years
+                            years = domain_age_days // 365
+                            remaining_days = domain_age_days % 365
+                            if remaining_days > 30:
+                                domain_age_display = f"{years}y {remaining_days // 30}m"
+                            else:
+                                domain_age_display = f"{years}y"
+                        else:  # 10+ years
+                            years = domain_age_days // 365
+                            domain_age_display = f"{years}y+"
+                    elif status_code and status_code != 0:
+                        domain_age_display = 'Unknown'
+                except:
+                    if status_code and status_code != 0:
+                        domain_age_display = 'Unknown'
             
             # Changes display
             if changes_detected == 1:
@@ -461,38 +528,42 @@ class WebsiteVerificationTool:
             else:
                 issues_display = 'Not Scanned'
             
-            # Determine tag for color coding
+            # Determine tag for color coding (enhanced with domain age)
             if status_code == 0 or status_code is None:
                 tag = 'not_scanned'
             elif risk_score and risk_score >= 50:
                 tag = 'high_risk'
             elif risk_score and risk_score >= 20:
                 tag = 'medium_risk'
+            elif domain_age_display.endswith('⚠️'):  # New domain warning
+                tag = 'new_domain'
             else:
                 tag = 'low_risk'
             
-            # Insert the row - this ensures exactly one row per website
+            # Insert the row - UPDATED to include domain age
             self.websites_tree.insert('', tk.END, values=(
                 website_id, name, url, 
                 last_checked[:16] if last_checked else 'Never',
                 status_display, ssl_display, registrar_display,
+                domain_age_display,  # NEW COLUMN DATA
                 changes_display, risk_display, issues_display
             ), tags=(tag,))
         
         conn.close()
         
-        # Configure tags for color coding
+        # Configure tags for color coding (enhanced with new domain tag)
         self.websites_tree.tag_configure('high_risk', background='#ffebee')  # Light red
         self.websites_tree.tag_configure('medium_risk', background='#fff3e0')  # Light orange
         self.websites_tree.tag_configure('low_risk', background='#e8f5e8')  # Light green
         self.websites_tree.tag_configure('not_scanned', background='#f5f5f5')  # Light gray
+        self.websites_tree.tag_configure('new_domain', background='#fff9c4')  # Light yellow for new domains
     
     def scan_website(self, website_id, url):
-        """Perform comprehensive scan of a website"""
+        """Perform comprehensive scan of a website with improved change detection"""
         try:
             print(f"Scanning website: {url}")
             
-            # Get previous scan for comparison with debug info
+            # Get previous scan for comparison
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             cursor.execute('''
@@ -507,7 +578,7 @@ class WebsiteVerificationTool:
             previous_registrar = previous_scan[2] if previous_scan else None
             previous_additional = previous_scan[3] if previous_scan else None
             
-            # Get previous content length and normalized length for comparison
+            # Get previous content metrics for comparison
             previous_content_length = None
             previous_normalized_length = None
             if previous_additional:
@@ -518,12 +589,12 @@ class WebsiteVerificationTool:
                 except:
                     pass
             
-            print(f"Scanning {url}:")
+            print(f"Previous scan data:")
             print(f"  Previous hash: {previous_hash}")
             print(f"  Previous content length: {previous_content_length}")
             print(f"  Previous normalized length: {previous_normalized_length}")
             
-            # Perform checks
+            # Perform current scan
             scan_result = self.perform_website_checks(url)
             scan_result['website_id'] = website_id
             
@@ -531,78 +602,107 @@ class WebsiteVerificationTool:
             current_content_length = scan_result.get('additional_checks', {}).get('content_length')
             current_normalized_length = scan_result.get('additional_checks', {}).get('normalized_length')
             
+            print(f"Current scan data:")
             print(f"  Current hash: {current_hash}")
             print(f"  Current content length: {current_content_length}")
             print(f"  Current normalized length: {current_normalized_length}")
             
-            # Debug content changes if hashes differ
-            if previous_hash and current_hash and previous_hash != current_hash:
-                self.debug_content_changes(
-                    url, previous_hash, current_hash,
-                    None,  # We don't store previous content, just lengths
-                    scan_result.get('normalized_content', '')
-                )
-            
-            # Enhanced change detection with validation
-            current_title = scan_result.get('page_title', '')
-            current_registrar = scan_result.get('registrar', '')
-            
+            # Enhanced change detection
             changes_detected = False
             change_details = []
             
-            # Only flag content changes if they're significant
+            # 1. Content hash comparison with categorization
             if previous_hash and current_hash:
-                content_changed = self.calculate_content_similarity(
-                    previous_hash, current_hash, 
-                    previous_normalized_length or previous_content_length, 
-                    current_normalized_length or current_content_length
-                )
-                if content_changed:
+                if previous_hash != current_hash:
+                    # Content has changed - analyze the type of change
+                    change_analysis = self.analyze_content_changes(
+                        previous_hash, current_hash,
+                        previous_content_length, current_content_length,
+                        previous_normalized_length, current_normalized_length
+                    )
+                    
+                    change_type = change_analysis['change_type']
+                    change_pct = change_analysis['change_pct']
+                    
+                    # Always flag as a change, but categorize it
                     changes_detected = True
                     
-                    # Calculate change percentage for details
-                    if previous_content_length and current_content_length:
-                        change_pct = abs(current_content_length - previous_content_length) / previous_content_length * 100
-                        change_details.append(f'Significant content changed ({change_pct:.1f}% size change)')
-                    else:
-                        change_details.append('Significant content changed')
+                    # Create appropriate change details based on type
+                    if change_type == 'informational':
+                        if change_pct is not None:
+                            change_details.append(f'Minor content change ({change_pct:.1f}% - informational)')
+                        else:
+                            change_details.append('Minor content change (informational)')
+                        print(f"  ℹ INFORMATIONAL content change detected")
+                        
+                    elif change_type == 'moderate':
+                        if change_pct is not None:
+                            change_details.append(f'Moderate content change ({change_pct:.1f}%)')
+                        else:
+                            change_details.append('Moderate content change')
+                        print(f"  ⚠ MODERATE content change detected")
+                        
+                    elif change_type == 'major':
+                        if change_pct is not None:
+                            change_details.append(f'Major content change ({change_pct:.1f}%)')
+                        else:
+                            change_details.append('Major content change')
+                        print(f"  🚨 MAJOR content change detected")
                     
-                    print(f"  ✓ Significant content change flagged")
-                elif previous_hash != current_hash:
-                    print(f"  ○ Minor content change ignored (likely dynamic content)")
+                    # Store change type for later use
+                    scan_result['additional_checks']['content_change_type'] = change_type
+                    if change_pct is not None:
+                        scan_result['additional_checks']['content_change_percentage'] = round(change_pct, 1)
+                        
+                else:
+                    print(f"  ✓ No content changes")
+            elif not previous_hash and current_hash:
+                # First scan - not a change
+                print(f"  ○ First scan - baseline established")
+            elif previous_hash and not current_hash:
+                # Current scan failed to get content
+                print(f"  ⚠ Current scan failed to retrieve content")
             
-            # Check title change (only if substantially different)
+            # 2. Page title comparison
+            current_title = scan_result.get('page_title', '')
             if previous_title and current_title:
                 if not self.titles_similar(previous_title, current_title):
                     changes_detected = True
-                    change_details.append(f'Title changed: "{previous_title}" -> "{current_title}"')
-                    print(f"  ✓ Significant title change flagged")
+                    change_details.append(f'Title changed: "{previous_title}" → "{current_title}"')
+                    print(f"  ✓ Significant title change detected")
                 elif previous_title != current_title:
                     print(f"  ○ Minor title change ignored")
             
-            # Check registrar change (this is always significant)
+            # 3. Registrar change (always significant)
+            current_registrar = scan_result.get('registrar', '')
             if previous_registrar and current_registrar:
-                if previous_registrar != current_registrar and current_registrar not in ['Unknown', 'Whois lookup failed']:
+                if (previous_registrar != current_registrar and 
+                    current_registrar not in ['Unknown', 'Whois lookup failed'] and
+                    previous_registrar not in ['Unknown', 'Whois lookup failed']):
                     changes_detected = True
-                    change_details.append(f'Registrar changed: {previous_registrar} -> {current_registrar}')
-                    print(f"  ✓ Registrar change flagged")
+                    change_details.append(f'Registrar changed: {previous_registrar} → {current_registrar}')
+                    print(f"  ✓ Registrar change detected")
             
+            # Store change detection results
             scan_result['changes_detected'] = changes_detected
             if change_details:
                 scan_result['additional_checks']['change_details'] = '; '.join(change_details)
+                scan_result['additional_checks']['change_count'] = len(change_details)
             
-            print(f"  Final result: {'CHANGES DETECTED' if changes_detected else 'NO SIGNIFICANT CHANGES'}")
+            print(f"Final change detection result: {'CHANGES DETECTED' if changes_detected else 'NO SIGNIFICANT CHANGES'}")
+            if change_details:
+                print(f"Change details: {'; '.join(change_details)}")
             
             # Calculate risk score
             risk_score = self.calculate_risk_score(scan_result)
             scan_result['risk_score'] = risk_score
             
-            # Save results
+            # Save results to database
             cursor.execute('''
                 INSERT INTO scan_results 
                 (website_id, registrar, page_title, status_code, ssl_valid, 
-                 ssl_issuer, ssl_expiry, source_code_hash, changes_detected, 
-                 risk_score, additional_checks)
+                ssl_issuer, ssl_expiry, source_code_hash, changes_detected, 
+                risk_score, additional_checks)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 scan_result['website_id'], scan_result['registrar'], 
@@ -613,7 +713,7 @@ class WebsiteVerificationTool:
                 json.dumps(scan_result.get('additional_checks', {}))
             ))
             
-            # Update website last_checked
+            # Update website last_checked timestamp
             cursor.execute('''
                 UPDATE websites SET last_checked = CURRENT_TIMESTAMP, status = ?
                 WHERE id = ?
@@ -622,8 +722,8 @@ class WebsiteVerificationTool:
             conn.commit()
             conn.close()
             
-            # Only send notification for significant changes or high risk
-            if (changes_detected and change_details) or risk_score >= 70:
+            # Send notifications based on change type and risk
+            if changes_detected:
                 self.send_change_notification(url, scan_result, change_details)
             
             print(f"Scan completed for {url}. Risk score: {risk_score}, Changes: {changes_detected}")
@@ -645,6 +745,149 @@ class WebsiteVerificationTool:
             except:
                 pass
             return None
+
+
+    def send_change_notification(self, url, scan_result, change_details):
+        """Send notification about detected changes (only for moderate/major changes)"""
+        if not self.settings.get('notification_emails'):
+            return
+        
+        # Only send notifications for moderate or major content changes, or other significant changes
+        content_change_type = scan_result.get('additional_checks', {}).get('content_change_type')
+        high_risk = scan_result.get('risk_score', 0) >= 70
+        
+        # Check if we should send notification
+        should_notify = False
+        if high_risk:
+            should_notify = True
+        elif content_change_type in ['moderate', 'major']:
+            should_notify = True
+        elif any('Title changed' in detail or 'Registrar changed' in detail for detail in change_details):
+            should_notify = True
+        
+        if not should_notify:
+            print(f"  ○ Informational changes only - no notification sent")
+            return
+        
+        try:
+            # Categorize urgency
+            if content_change_type == 'major' or high_risk:
+                urgency = "HIGH PRIORITY"
+                emoji = "🚨"
+            elif content_change_type == 'moderate':
+                urgency = "MEDIUM PRIORITY"
+                emoji = "⚠️"
+            else:
+                urgency = "INFORMATIONAL"
+                emoji = "ℹ️"
+            
+            subject = f"{emoji} Website Change Alert [{urgency}]: {url}"
+            
+            body = f"""
+    Website Change Detection Alert
+
+    URL: {url}
+    Scan Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+    Risk Score: {scan_result.get('risk_score', 0)}/100
+    Priority: {urgency}
+
+    CHANGES DETECTED:
+    {chr(10).join('• ' + detail for detail in change_details)}
+
+    Current Status:
+    • HTTP Status: {scan_result.get('status_code', 'Unknown')}
+    • SSL Valid: {'Yes' if scan_result.get('ssl_valid') else 'No'}
+    • Page Title: {scan_result.get('page_title', 'Unknown')}
+    • Registrar: {scan_result.get('registrar', 'Unknown')}
+
+    {f"Content Change Type: {content_change_type.upper()}" if content_change_type else ""}
+
+    Please review this website for potential security issues.
+
+    ---
+    Website Verification Tool
+            """.strip()
+            
+            self.send_notification_email(subject, body)
+            print(f"  📧 {urgency} notification email sent for {url}")
+            
+        except Exception as e:
+            print(f"  Failed to send change notification: {e}")
+
+    def normalize_content_for_hashing(self, content):
+        """Improved content normalization for better change detection"""
+        import re
+        
+        # Convert to lowercase for consistency
+        content = content.lower()
+        
+        # Remove elements that change frequently but aren't meaningful
+        patterns_to_remove = [
+            # Comments and scripts (most dynamic)
+            r'<!--.*?-->',
+            r'<script[^>]*>.*?</script>',
+            r'<style[^>]*>.*?</style>',
+            r'<noscript[^>]*>.*?</noscript>',
+            
+            # Time-based content
+            r'timestamp["\'][^"\']*["\']',
+            r'data-timestamp["\'][^"\']*["\']',
+            r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[Z\d\-\+:]*',  # ISO timestamps
+            r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}',  # Standard timestamps
+            r'last[_\-]?modified["\'][^"\']*["\']',
+            r'generated[_\-]?at["\'][^"\']*["\']',
+            
+            # Security tokens (change on every request)
+            r'csrf[_\-]?token["\'][^"\']*["\']',
+            r'_token["\'][^"\']*["\']',
+            r'nonce["\'][^"\']*["\']',
+            r'session[_\-]?id["\'][^"\']*["\']',
+            
+            # Analytics and tracking
+            r'gtag\([^)]*\)',
+            r'ga\([^)]*\)',
+            r'fbq\([^)]*\)',
+            r'dataLayer\.push\([^)]*\)',
+            
+            # Cache busters and version parameters
+            r'\?v=[\d\.]+',
+            r'\?ver=[\d\.]+',
+            r'\?_=\d+',
+            r'&t=\d+',
+            r'&cache=\d+',
+            
+            # Random IDs and UUIDs
+            r'id=["\'][a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}["\']',
+            r'data-id=["\'][a-f0-9]+["\']',
+            
+            # External tracking URLs
+            r'https?://[^"\'\s]*google-analytics\.com[^"\'\s]*',
+            r'https?://[^"\'\s]*googletagmanager\.com[^"\'\s]*',
+            r'https?://[^"\'\s]*facebook\.net[^"\'\s]*',
+            r'https?://[^"\'\s]*doubleclick\.net[^"\'\s]*',
+        ]
+        
+        # Apply all removal patterns
+        for pattern in patterns_to_remove:
+            content = re.sub(pattern, '', content, flags=re.DOTALL | re.IGNORECASE)
+        
+        # Normalize whitespace while preserving structure
+        content = re.sub(r'\s+', ' ', content)  # Multiple spaces to single space
+        content = re.sub(r'>\s+<', '><', content)  # Remove spaces between tags
+        content = re.sub(r'\s*=\s*', '=', content)  # Normalize attribute spacing
+        
+        # Remove empty attributes
+        content = re.sub(r'\s+(class|id|style)=["\']["\']', '', content)
+        
+        # Focus on body content if available (head section is very dynamic)
+        body_match = re.search(r'<body[^>]*>(.*)</body>', content, re.DOTALL | re.IGNORECASE)
+        if body_match:
+            content = body_match.group(1)
+        
+        # Remove leading/trailing whitespace
+        content = content.strip()
+        
+        return content    
     
     def titles_similar(self, title1, title2):
         """Check if two titles are similar enough to not be considered a change"""
@@ -965,124 +1208,6 @@ class WebsiteVerificationTool:
         
         return False
 
-    def normalize_content_for_hashing(self, content):
-        """Normalize HTML content to detect meaningful changes while ignoring dynamic elements"""
-        import re
-        
-        # Convert to lowercase for consistency
-        content = content.lower()
-        
-        # Remove common dynamic elements that change frequently
-        patterns_to_remove = [
-            r'<!--.*?-->',  # Comments
-            r'<script[^>]*>.*?</script>',  # JavaScript (most dynamic)
-            r'<style[^>]*>.*?</style>',  # CSS
-            r'<noscript[^>]*>.*?</noscript>',  # NoScript tags
-            
-            # Time and date related patterns
-            r'timestamp["\'][^"\']*["\']',  # Timestamps
-            r'date["\'][^"\']*["\']',  # Dates  
-            r'time["\'][^"\']*["\']',  # Times
-            r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[Z\d\-\+:]*',  # ISO timestamps
-            r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}',  # Standard timestamps
-            r'\d{1,2}/\d{1,2}/\d{4}',  # Date formats
-            r'\d{2}:\d{2}:\d{2}',  # Time patterns
-            r'last[_\-]?modified["\'][^"\']*["\']',  # Last modified
-            r'generated[_\-]?on["\'][^"\']*["\']',  # Generated on
-            
-            # Security and session related
-            r'nonce["\'][^"\']*["\']',  # Security nonces
-            r'csrf["\'][^"\']*["\']',  # CSRF tokens
-            r'session["\'][^"\']*["\']',  # Session IDs
-            r'token["\'][^"\']*["\']',  # Various tokens
-            r'_wpnonce["\'][^"\']*["\']',  # WordPress nonces
-            
-            # Analytics and tracking
-            r'gtag\([^)]*\)',  # Google Analytics gtag
-            r'ga\([^)]*\)',  # Google Analytics ga
-            r'fbq\([^)]*\)',  # Facebook Pixel
-            r'dataLayer\.push\([^)]*\)',  # Data layer pushes
-            
-            # Dynamic content areas
-            r'<div[^>]*id["\']=["\']?random[^"\']*["\']?[^>]*>.*?</div>',  # Random content
-            r'<span[^>]*class["\']=["\']?time[^"\']*["\']?[^>]*>.*?</span>',  # Time displays
-            r'<div[^>]*class["\']=["\']?date[^"\']*["\']?[^>]*>.*?</div>',  # Date displays
-            
-            # Version numbers and cache busters
-            r'\?v=[\d\.]+',  # Version parameters
-            r'\?ver=[\d\.]+',  # Version parameters
-            r'\?_=\d+',  # Cache busters
-            r'&t=\d+',  # Timestamp parameters
-            
-            # Social media dynamic content
-            r'<iframe[^>]*facebook\.com[^>]*>.*?</iframe>',  # Facebook embeds
-            r'<iframe[^>]*twitter\.com[^>]*>.*?</iframe>',  # Twitter embeds
-            r'<div[^>]*fb-[^>]*>.*?</div>',  # Facebook widgets
-            
-            # Advertisement placeholders that change
-            r'<div[^>]*google_ads[^>]*>.*?</div>',  # Google ads
-            r'<ins[^>]*adsbygoogle[^>]*>.*?</ins>',  # AdSense
-        ]
-        
-        for pattern in patterns_to_remove:
-            content = re.sub(pattern, '', content, flags=re.DOTALL | re.IGNORECASE)
-        
-        # Remove external tracking and analytics URLs completely
-        tracking_patterns = [
-            r'https?://[^"\'\s]*google-analytics\.com[^"\'\s]*',
-            r'https?://[^"\'\s]*googletagmanager\.com[^"\'\s]*',
-            r'https?://[^"\'\s]*facebook\.net[^"\'\s]*',
-            r'https?://[^"\'\s]*doubleclick\.net[^"\'\s]*',
-            r'https?://[^"\'\s]*googlesyndication\.com[^"\'\s]*',
-            r'https?://[^"\'\s]*google\.com/recaptcha[^"\'\s]*',
-            r'https?://[^"\'\s]*gstatic\.com[^"\'\s]*',
-            r'https?://[^"\'\s]*youtube\.com/embed[^"\'\s]*',
-        ]
-        
-        for pattern in tracking_patterns:
-            content = re.sub(pattern, 'TRACKING_URL_REMOVED', content, flags=re.IGNORECASE)
-        
-        # Normalize whitespace but preserve structure
-        content = re.sub(r'\s+', ' ', content)
-        content = re.sub(r'>\s+<', '><', content)  # Remove spaces between tags
-        
-        # Remove empty attributes that might vary
-        content = re.sub(r'\s+(class|id|style)=["\']["\']', '', content)
-        
-        # Only keep the main content structure - remove head section which is most dynamic
-        # Find body content if it exists
-        body_match = re.search(r'<body[^>]*>(.*)</body>', content, re.DOTALL | re.IGNORECASE)
-        if body_match:
-            content = body_match.group(1)
-        
-        return content.strip()
-    
-    def calculate_content_similarity(self, old_hash, new_hash, old_content_length, new_content_length):
-        """Calculate if the content change is significant enough to report"""
-        if not old_hash or not new_hash:
-            return False  # No previous content to compare
-        
-        if old_hash == new_hash:
-            return False  # No change
-        
-        # If content length is very similar (within 5%), likely not significant
-        if old_content_length and new_content_length:
-            length_change_percent = abs(new_content_length - old_content_length) / old_content_length * 100
-            
-            # If content length changed by less than 5%, it's likely just dynamic content
-            if length_change_percent < 5:
-                print(f"Content length change too small to be significant: {length_change_percent:.1f}%")
-                return False
-            
-            # If content length changed dramatically (>30%), likely significant
-            if length_change_percent > 30:
-                print(f"Significant content length change detected: {length_change_percent:.1f}%")
-                return True
-        
-        # For moderate changes (5-30%), we need additional validation
-        # This is where we could add more sophisticated checks in the future
-        print(f"Moderate content change detected - treating as significant for now")
-        return True
     
     def debug_content_changes(self, url, old_hash, new_hash, old_content, new_content):
         """Debug function to help understand what's changing in content"""
