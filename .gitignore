@@ -195,3 +195,5 @@ cython_debug/
 *.db
 *.db
 *.db
+*.db
+wearelegalshield_com.txt
