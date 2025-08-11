@@ -47,6 +47,10 @@ class WebsiteVerificationTool:
         self.last_sort_column = None
         self.last_sort_reverse = False
 
+        # Scan state
+        self.is_scanning = False
+        self.scan_cancelled = False
+
         self.setup_ui()
         self.apply_theme(self.settings.get('theme', 'light'))
         self.load_websites()
@@ -382,12 +386,16 @@ class WebsiteVerificationTool:
         # Bind double-click to view details
         self.websites_tree.bind('<Double-1>', self.view_website_details)
 
-        # Progress bar and status label for scanning (hidden initially)
+        # Progress bar, status label, and cancel button for scanning (hidden initially)
         self.progress_frame = ttk.Frame(self.websites_frame)
         self.scan_progress = ttk.Progressbar(self.progress_frame, mode='determinate')
         self.scan_progress.pack(fill=tk.X, padx=10, pady=(5, 2))
-        self.scan_status_label = ttk.Label(self.progress_frame, text="")
-        self.scan_status_label.pack(fill=tk.X, padx=10)
+        progress_bottom = ttk.Frame(self.progress_frame)
+        progress_bottom.pack(fill=tk.X, padx=10)
+        self.scan_status_label = ttk.Label(progress_bottom, text="")
+        self.scan_status_label.pack(side=tk.LEFT)
+        self.cancel_scan_button = ttk.Button(progress_bottom, text="Cancel", command=self.cancel_scan, state=tk.DISABLED)
+        self.cancel_scan_button.pack(side=tk.RIGHT)
 
     def sort_websites_tree(self, column, reverse):
         """Sort the websites treeview by a given column."""
@@ -1076,8 +1084,11 @@ class WebsiteVerificationTool:
         print(f"Starting scan for {url} (max retries: {max_retries}, delay: {retry_delay}s)")
         
         last_error = None
-        
+
         for attempt in range(max_retries + 1):  # +1 because we want initial attempt + retries
+            if self.scan_cancelled:
+                print("  Scan cancelled during retries")
+                return None
             try:
                 if attempt > 0:
                     print(f"  Retry attempt {attempt}/{max_retries} for {url}")
@@ -1746,6 +1757,7 @@ class WebsiteVerificationTool:
         self.scan_progress['value'] = 0
         self.scan_progress['maximum'] = total
         self.scan_status_label.config(text=f"Scanning 0/{total}...")
+        self.cancel_scan_button.config(state=tk.NORMAL)
         self.progress_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
 
     def update_scan_progress(self, current, total):
@@ -1757,10 +1769,32 @@ class WebsiteVerificationTool:
         """Hide and reset the progress bar"""
         self.scan_progress['value'] = 0
         self.scan_status_label.config(text="")
+        self.cancel_scan_button.config(state=tk.DISABLED)
         self.progress_frame.pack_forget()
+
+    def cancel_scan(self):
+        """Signal the active scan to cancel"""
+        if self.is_scanning:
+            self.scan_cancelled = True
+            self.cancel_scan_button.config(state=tk.DISABLED)
+            self.scan_status_label.config(text="Cancelling scan...")
+
+    def finish_scan(self, total, cancelled):
+        """Finalize scanning UI state"""
+        if cancelled:
+            self.scan_status_label.config(text="Scan cancelled")
+        else:
+            self.scan_status_label.config(text=f"Scan complete: {total} websites")
+        self.is_scanning = False
+        self.root.after(2000, self.reset_scan_progress)
 
     def scan_all_websites(self):
         """Scan all websites in separate thread with retry logic"""
+        if self.is_scanning:
+            return
+        self.is_scanning = True
+        self.scan_cancelled = False
+
         def scan_thread():
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
@@ -1771,18 +1805,17 @@ class WebsiteVerificationTool:
             total_websites = len(websites)
             self.root.after(0, lambda: self.start_scan_progress(total_websites))
             for i, (website_id, url) in enumerate(websites, 1):
+                if self.scan_cancelled:
+                    break
                 print(f"\n--- Scanning {i}/{total_websites}: {url} ---")
-                result = self.scan_website_with_retries(website_id, url)  # Use retry method
-                # Update UI in main thread after each scan
+                self.scan_website_with_retries(website_id, url)
                 self.root.after(0, self.load_websites)
                 self.root.after(0, self.load_scan_results)
                 self.root.after(0, lambda i=i: self.update_scan_progress(i, total_websites))
 
-            self.root.after(0, self.reset_scan_progress)
-            self.root.after(0, lambda: messagebox.showinfo("Complete", f"All {total_websites} websites scanned with retry logic"))
+            self.root.after(0, lambda: self.finish_scan(total_websites, self.scan_cancelled))
 
         threading.Thread(target=scan_thread, daemon=True).start()
-        messagebox.showinfo("Scanning", f"Scanning all websites with up to {self.settings.get('scan_retries', 5)} retries each...")
 
         
     def scan_selected(self):
@@ -1792,24 +1825,28 @@ class WebsiteVerificationTool:
             messagebox.showwarning("Warning", "Please select websites to scan")
             return
 
+        if self.is_scanning:
+            return
+        self.is_scanning = True
+        self.scan_cancelled = False
+
         def scan_thread():
             total_selected = len(selection)
             self.root.after(0, lambda: self.start_scan_progress(total_selected))
             for i, item in enumerate(selection, 1):
+                if self.scan_cancelled:
+                    break
                 values = self.websites_tree.item(item)['values']
                 website_id, url = values[0], values[2]
                 print(f"\n--- Scanning {i}/{total_selected}: {url} ---")
-                self.scan_website_with_retries(website_id, url)  # Use retry method
-                # Update UI after each scan
+                self.scan_website_with_retries(website_id, url)
                 self.root.after(0, self.load_websites)
                 self.root.after(0, self.load_scan_results)
                 self.root.after(0, lambda i=i: self.update_scan_progress(i, total_selected))
 
-            self.root.after(0, self.reset_scan_progress)
-            self.root.after(0, lambda: messagebox.showinfo("Complete", f"Selected {total_selected} websites scanned with retry logic"))
+            self.root.after(0, lambda: self.finish_scan(total_selected, self.scan_cancelled))
 
         threading.Thread(target=scan_thread, daemon=True).start()
-        messagebox.showinfo("Scanning", f"Scanning selected websites with up to {self.settings.get('scan_retries', 5)} retries each...")
         
     def delete_selected(self):
         """Delete selected websites"""
