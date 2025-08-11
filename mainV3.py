@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 import threading
 import os
 import json
+import re
 from urllib.parse import urlparse
 import subprocess
 import sys
@@ -41,6 +42,10 @@ class WebsiteVerificationTool:
 
         # Settings
         self.settings = self.load_settings()
+
+        # Sorting state for websites treeview
+        self.last_sort_column = None
+        self.last_sort_reverse = False
 
         self.setup_ui()
         self.apply_theme(self.settings.get('theme', 'light'))
@@ -355,7 +360,11 @@ class WebsiteVerificationTool:
         }
         
         for col in columns:
-            self.websites_tree.heading(col, text=col)
+            self.websites_tree.heading(
+                col,
+                text=col,
+                command=lambda _col=col: self.sort_websites_tree(_col, False)
+            )
             self.websites_tree.column(col, width=column_configs.get(col, 100))
         
         # Scrollbars
@@ -379,6 +388,48 @@ class WebsiteVerificationTool:
         self.scan_progress.pack(fill=tk.X, padx=10, pady=(5, 2))
         self.scan_status_label = ttk.Label(self.progress_frame, text="")
         self.scan_status_label.pack(fill=tk.X, padx=10)
+
+    def sort_websites_tree(self, column, reverse):
+        """Sort the websites treeview by a given column."""
+        data = [(self.websites_tree.set(k, column), k) for k in self.websites_tree.get_children('')]
+
+        def sort_key(item):
+            value = item[0]
+            try:
+                return float(value)
+            except (ValueError, TypeError):
+                match = re.search(r'-?\d+(?:\.\d+)?', str(value))
+                if match:
+                    try:
+                        return float(match.group())
+                    except ValueError:
+                        pass
+                return str(value).lower()
+
+        data.sort(key=sort_key, reverse=reverse)
+
+        for index, (_, k) in enumerate(data):
+            self.websites_tree.move(k, '', index)
+
+        for col in self.websites_tree["columns"]:
+            heading_text = col
+            if col == column:
+                heading_text += ' ▼' if reverse else ' ▲'
+                self.websites_tree.heading(
+                    col,
+                    text=heading_text,
+                    command=lambda _col=col, _rev=not reverse: self.sort_websites_tree(_col, _rev)
+                )
+            else:
+                self.websites_tree.heading(
+                    col,
+                    text=heading_text,
+                    command=lambda _col=col: self.sort_websites_tree(_col, False)
+                )
+
+        self.last_sort_column = column
+        self.last_sort_reverse = reverse
+
     def setup_results_tab(self):
         # Filter frame
         filter_frame = ttk.LabelFrame(self.results_frame, text="Filters", padding=10)
@@ -734,6 +785,10 @@ class WebsiteVerificationTool:
         self.websites_tree.tag_configure('not_scanned', background='#f5f5f5')  # Light gray
         self.websites_tree.tag_configure('new_domain', background='#fff9c4')  # Light yellow for new domains
         self.websites_tree.tag_configure('mx_warning', background='#fce4ec')  # Light pink for MX issues
+
+        # Reapply previous sorting if available
+        if self.last_sort_column:
+            self.sort_websites_tree(self.last_sort_column, self.last_sort_reverse)
 
     def filter_websites(self, event=None):
         """Filter websites based on search entry text."""
