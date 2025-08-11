@@ -28,18 +28,22 @@ class WebsiteVerificationTool:
     def __init__(self, root):
         self.root = root
         self.root.title("Website Legitimacy Verification Tool")
-        self.root.geometry("1500x900")  # Increased width for new MX column
-        self.root.configure(bg='#f0f0f0')
-        
+        self.root.state('zoomed')
+
+        # Style initialization for modern look
+        self.style = ttk.Style()
+        self.style.theme_use('clam')
+
         # Database setup
         self.db_path = "website_verification.db"
         self.init_database()
         self.update_database_schema()  # Ensure MX columns exist
-        
+
         # Settings
         self.settings = self.load_settings()
-        
+
         self.setup_ui()
+        self.apply_theme(self.settings.get('theme', 'light'))
         self.load_websites()
         
     def init_database(self):
@@ -129,7 +133,7 @@ class WebsiteVerificationTool:
         cursor.execute("SELECT key, value FROM settings")
         settings_data = dict(cursor.fetchall())
         
-        # Default settings - UPDATED to include retry settings
+        # Default settings - UPDATED to include retry settings and theme
         defaults = {
             'email_smtp_server': 'smtp.gmail.com',
             'email_smtp_port': '587',
@@ -139,7 +143,8 @@ class WebsiteVerificationTool:
             'scan_frequency_days': '7',
             'github_repo': '',
             'scan_retries': '5',  # NEW: Default 5 retries
-            'retry_delay_seconds': '3'  # NEW: Default 3 second delay
+            'retry_delay_seconds': '3',  # NEW: Default 3 second delay
+            'theme': 'light'
         }
         
         for key, default_value in defaults.items():
@@ -160,6 +165,45 @@ class WebsiteVerificationTool:
         conn.commit()
         conn.close()
         self.settings[key] = value
+
+    def apply_theme(self, theme):
+        """Apply light or dark theme to the application"""
+        bg_light = '#f0f0f0'
+        fg_light = '#000000'
+        accent_light = '#e0e0e0'
+
+        bg_dark = '#2e2e2e'
+        fg_dark = '#ffffff'
+        accent_dark = '#444444'
+
+        if theme == 'dark':
+            bg, fg, accent, entry_bg = bg_dark, fg_dark, accent_dark, '#3c3c3c'
+        else:
+            bg, fg, accent, entry_bg = bg_light, fg_light, accent_light, '#ffffff'
+
+        # Configure root background and default font
+        self.root.configure(bg=bg)
+
+        # Base style
+        self.style.configure('.', background=bg, foreground=fg, font=('Segoe UI', 10))
+
+        # Common widget styles
+        self.style.configure('TFrame', background=bg)
+        self.style.configure('TLabel', background=bg, foreground=fg)
+        self.style.configure('TButton', background=accent, foreground=fg)
+        self.style.configure('TEntry', fieldbackground=entry_bg, foreground=fg)
+        self.style.configure('TNotebook', background=bg)
+        self.style.configure('TNotebook.Tab', background=accent, foreground=fg, font=('Segoe UI', 10))
+        self.style.configure('Treeview', background=bg, fieldbackground=bg, foreground=fg, font=('Segoe UI', 10))
+        self.style.configure('Treeview.Heading', background=accent, foreground=fg, font=('Segoe UI', 10, 'bold'))
+
+        # Update theme variable if it exists
+        if hasattr(self, 'theme_var'):
+            self.theme_var.set(theme)
+
+        # Update text widgets if present
+        if hasattr(self, 'report_text'):
+            self.report_text.configure(bg=bg, fg=fg, insertbackground=fg)
     
     def analyze_content_changes(self, old_hash, new_hash, old_length, new_length, old_norm_length, new_norm_length):
         """Analyze content changes and categorize them"""
@@ -397,7 +441,18 @@ class WebsiteVerificationTool:
         
         ttk.Button(github_frame, text="Sync to GitHub", command=self.sync_to_github).grid(row=0, column=2, padx=10)
         ttk.Button(github_frame, text="Pull from GitHub", command=self.pull_from_github).grid(row=0, column=3, padx=5)
-        
+
+        # Appearance settings
+        appearance_frame = ttk.LabelFrame(self.settings_frame, text="Appearance", padding=10)
+        appearance_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        ttk.Label(appearance_frame, text="Theme:").grid(row=0, column=0, sticky='w')
+        self.theme_var = tk.StringVar(value=self.settings.get('theme', 'light'))
+        ttk.Radiobutton(appearance_frame, text="Light", variable=self.theme_var, value='light',
+                        command=lambda: self.apply_theme('light')).grid(row=0, column=1, padx=5)
+        ttk.Radiobutton(appearance_frame, text="Dark", variable=self.theme_var, value='dark',
+                        command=lambda: self.apply_theme('dark')).grid(row=0, column=2, padx=5)
+
         # Save button
         ttk.Button(self.settings_frame, text="Save Settings", command=self.save_settings).pack(pady=20)
 
@@ -1802,7 +1857,8 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
             'scan_frequency_days': self.scan_frequency_entry.get(),
             'github_repo': self.github_repo_entry.get(),
             'scan_retries': self.scan_retries_entry.get(),  # NEW
-            'retry_delay_seconds': self.retry_delay_entry.get()  # NEW
+            'retry_delay_seconds': self.retry_delay_entry.get(),  # NEW
+            'theme': self.theme_var.get()
         }
         
         # Validate retry settings
