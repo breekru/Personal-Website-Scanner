@@ -298,7 +298,17 @@ class WebsiteVerificationTool:
         # Websites list
         list_frame = ttk.LabelFrame(self.websites_frame, text="Monitored Websites", padding=10)
         list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
-        
+
+        # Search bar for filtering websites
+        search_frame = ttk.Frame(list_frame)
+        search_frame.grid(row=0, column=0, columnspan=2, sticky='ew', pady=(0, 5))
+        self.search_var = tk.StringVar()
+        self.search_entry = ttk.Entry(search_frame, textvariable=self.search_var)
+        self.search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.search_entry.bind('<Return>', self.filter_websites)
+        ttk.Button(search_frame, text="Search", command=self.filter_websites).pack(side=tk.LEFT, padx=5)
+        ttk.Button(search_frame, text="Clear", command=self.clear_search).pack(side=tk.LEFT)
+
         # Treeview for websites with comprehensive columns - UPDATED to include MX Records
         columns = ('ID', 'Name', 'URL', 'Last Checked', 'Status Code', 'SSL', 'Registrar', 'Domain Age', 'MX Records', 'Changes', 'Risk Score', 'Issues')
         self.websites_tree = ttk.Treeview(list_frame, columns=columns, show='headings', selectmode='extended')
@@ -328,11 +338,11 @@ class WebsiteVerificationTool:
         h_scrollbar = ttk.Scrollbar(list_frame, orient="horizontal", command=self.websites_tree.xview)
         self.websites_tree.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
         
-        self.websites_tree.grid(row=0, column=0, sticky='nsew')
-        v_scrollbar.grid(row=0, column=1, sticky='ns')
-        h_scrollbar.grid(row=1, column=0, sticky='ew')
-        
-        list_frame.grid_rowconfigure(0, weight=1)
+        self.websites_tree.grid(row=1, column=0, sticky='nsew')
+        v_scrollbar.grid(row=1, column=1, sticky='ns')
+        h_scrollbar.grid(row=2, column=0, sticky='ew')
+
+        list_frame.grid_rowconfigure(1, weight=1)
         list_frame.grid_columnconfigure(0, weight=1)
 
         # Bind double-click to view details
@@ -503,16 +513,23 @@ class WebsiteVerificationTool:
         except sqlite3.IntegrityError:
             messagebox.showerror("Error", "Website already exists in database")
     
-    def load_websites(self):
+    def load_websites(self, search_term=None):
         """Load websites into the treeview with comprehensive information including domain age and MX records"""
         for item in self.websites_tree.get_children():
             self.websites_tree.delete(item)
-        
+
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
-        # First get all websites
-        cursor.execute('SELECT id, name, url, last_checked FROM websites ORDER BY name')
+
+        # First get all websites with optional search filter
+        if search_term:
+            cursor.execute(
+                'SELECT id, name, url, last_checked FROM websites '
+                'WHERE name LIKE ? OR url LIKE ? ORDER BY name',
+                (f"%{search_term}%", f"%{search_term}%")
+            )
+        else:
+            cursor.execute('SELECT id, name, url, last_checked FROM websites ORDER BY name')
         websites = cursor.fetchall()
         
         # Then get latest scan data for each website individually
@@ -692,7 +709,17 @@ class WebsiteVerificationTool:
         self.websites_tree.tag_configure('not_scanned', background='#f5f5f5')  # Light gray
         self.websites_tree.tag_configure('new_domain', background='#fff9c4')  # Light yellow for new domains
         self.websites_tree.tag_configure('mx_warning', background='#fce4ec')  # Light pink for MX issues
-    
+
+    def filter_websites(self, event=None):
+        """Filter websites based on search entry text."""
+        search_text = self.search_var.get().strip()
+        self.load_websites(search_text)
+
+    def clear_search(self):
+        """Clear the website search filter and reload all websites."""
+        self.search_var.set('')
+        self.load_websites()
+
     def perform_mx_check(self, domain):
         """NEW: Perform MX record check for a domain"""
         mx_result = {
