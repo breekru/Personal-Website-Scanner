@@ -243,6 +243,31 @@ class WebsiteVerificationTool:
             return {'has_changes': True, 'change_type': 'moderate', 'change_pct': primary_change_pct}
 
     def setup_ui(self):
+        # Create menu bar
+        menu_bar = tk.Menu(self.root)
+        self.root.config(menu=menu_bar)
+
+        # File menu
+        file_menu = tk.Menu(menu_bar, tearoff=0)
+        file_menu.add_command(label="Import", command=self.import_websites)
+        if hasattr(self, "export_websites"):
+            file_menu.add_command(label="Export", command=self.export_websites)
+        file_menu.add_separator()
+        file_menu.add_command(label="Exit", command=self.root.quit)
+        menu_bar.add_cascade(label="File", menu=file_menu)
+
+        # Tools menu
+        tools_menu = tk.Menu(menu_bar, tearoff=0)
+        tools_menu.add_command(label="Scan All", command=self.scan_all_websites)
+        tools_menu.add_command(label="Scan Selected", command=self.scan_selected)
+        tools_menu.add_command(label="Delete Selected", command=self.delete_selected)
+        menu_bar.add_cascade(label="Tools", menu=tools_menu)
+
+        # Help menu
+        help_menu = tk.Menu(menu_bar, tearoff=0)
+        help_menu.add_command(label="About", command=self.show_about)
+        menu_bar.add_cascade(label="Help", menu=help_menu)
+
         # Create notebook for tabs
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -719,6 +744,10 @@ class WebsiteVerificationTool:
         """Clear the website search filter and reload all websites."""
         self.search_var.set('')
         self.load_websites()
+
+    def show_about(self):
+        """Display application information."""
+        messagebox.showinfo("About", "Personal Website Scanner")
 
     def perform_mx_check(self, domain):
         """NEW: Perform MX record check for a domain"""
