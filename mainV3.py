@@ -334,11 +334,16 @@ class WebsiteVerificationTool:
         
         list_frame.grid_rowconfigure(0, weight=1)
         list_frame.grid_columnconfigure(0, weight=1)
-        
+
         # Bind double-click to view details
         self.websites_tree.bind('<Double-1>', self.view_website_details)
 
-    
+        # Progress bar and status label for scanning (hidden initially)
+        self.progress_frame = ttk.Frame(self.websites_frame)
+        self.scan_progress = ttk.Progressbar(self.progress_frame, mode='determinate')
+        self.scan_progress.pack(fill=tk.X, padx=10, pady=(5, 2))
+        self.scan_status_label = ttk.Label(self.progress_frame, text="")
+        self.scan_status_label.pack(fill=tk.X, padx=10)
     def setup_results_tab(self):
         # Filter frame
         filter_frame = ttk.LabelFrame(self.results_frame, text="Filters", padding=10)
@@ -1614,7 +1619,7 @@ class WebsiteVerificationTool:
         
         if additional.get('https_redirect') == False:
             score += 10
-        
+
         # Changes detected
         if scan_result.get('changes_detected'):
             # Check if MX changes are involved (more serious)
@@ -1622,9 +1627,27 @@ class WebsiteVerificationTool:
                 score += 25  # MX changes are more critical
             else:
                 score += 20  # Regular changes
-        
+
         return min(score, 100)  # Cap at 100
-    
+
+    def start_scan_progress(self, total):
+        """Show and initialize the scan progress bar"""
+        self.scan_progress['value'] = 0
+        self.scan_progress['maximum'] = total
+        self.scan_status_label.config(text=f"Scanning 0/{total}...")
+        self.progress_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+
+    def update_scan_progress(self, current, total):
+        """Update progress bar and status label"""
+        self.scan_progress['value'] = current
+        self.scan_status_label.config(text=f"Scanning {current}/{total}...")
+
+    def reset_scan_progress(self):
+        """Hide and reset the progress bar"""
+        self.scan_progress['value'] = 0
+        self.scan_status_label.config(text="")
+        self.progress_frame.pack_forget()
+
     def scan_all_websites(self):
         """Scan all websites in separate thread with retry logic"""
         def scan_thread():
@@ -1633,17 +1656,20 @@ class WebsiteVerificationTool:
             cursor.execute("SELECT id, url FROM websites")
             websites = cursor.fetchall()
             conn.close()
-            
+
             total_websites = len(websites)
+            self.root.after(0, lambda: self.start_scan_progress(total_websites))
             for i, (website_id, url) in enumerate(websites, 1):
                 print(f"\n--- Scanning {i}/{total_websites}: {url} ---")
                 result = self.scan_website_with_retries(website_id, url)  # Use retry method
                 # Update UI in main thread after each scan
                 self.root.after(0, self.load_websites)
                 self.root.after(0, self.load_scan_results)
-            
+                self.root.after(0, lambda i=i: self.update_scan_progress(i, total_websites))
+
+            self.root.after(0, self.reset_scan_progress)
             self.root.after(0, lambda: messagebox.showinfo("Complete", f"All {total_websites} websites scanned with retry logic"))
-        
+
         threading.Thread(target=scan_thread, daemon=True).start()
         messagebox.showinfo("Scanning", f"Scanning all websites with up to {self.settings.get('scan_retries', 5)} retries each...")
 
@@ -1654,9 +1680,10 @@ class WebsiteVerificationTool:
         if not selection:
             messagebox.showwarning("Warning", "Please select websites to scan")
             return
-        
+
         def scan_thread():
             total_selected = len(selection)
+            self.root.after(0, lambda: self.start_scan_progress(total_selected))
             for i, item in enumerate(selection, 1):
                 values = self.websites_tree.item(item)['values']
                 website_id, url = values[0], values[2]
@@ -1665,11 +1692,13 @@ class WebsiteVerificationTool:
                 # Update UI after each scan
                 self.root.after(0, self.load_websites)
                 self.root.after(0, self.load_scan_results)
-            
+                self.root.after(0, lambda i=i: self.update_scan_progress(i, total_selected))
+
+            self.root.after(0, self.reset_scan_progress)
             self.root.after(0, lambda: messagebox.showinfo("Complete", f"Selected {total_selected} websites scanned with retry logic"))
-        
+
         threading.Thread(target=scan_thread, daemon=True).start()
-        messagebox.showinfo("Scanning", f"Scanning selected websites with up to {self.settings.get('scan_retries', 5)} retries each...")    
+        messagebox.showinfo("Scanning", f"Scanning selected websites with up to {self.settings.get('scan_retries', 5)} retries each...")
         
     def delete_selected(self):
         """Delete selected websites"""
