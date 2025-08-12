@@ -2341,25 +2341,19 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
     def generate_scan_summary_csv(self):
         """Generate CSV summarizing changes between the two latest scans.
 
-        For each website with at least two scan entries, compare the most
-        recent scan with the previous one to detect changes in status code,
-        MX record status/count, and SSL validity/expiry. The findings are
-        written to a CSV file grouped by change type. Returns the path to the
-        generated CSV file.
+        For each website, compare the most recent scan with the previous one
+        to detect changes in status code, MX record status/count, and SSL
+        validity/expiry. If a website has fewer than two scans, it is noted as
+        having no previous scan. The findings are written to a CSV file grouped
+        by change type. Returns the path to the generated CSV file.
         """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
         cursor.execute(
             """
-            SELECT w.id, COALESCE(w.name, w.url)
-            FROM websites w
-            JOIN (
-                SELECT website_id
-                FROM scan_results
-                GROUP BY website_id
-                HAVING COUNT(*) >= 2
-            ) sr ON w.id = sr.website_id
+            SELECT id, COALESCE(name, url)
+            FROM websites
             """
         )
         websites = cursor.fetchall()
@@ -2367,6 +2361,7 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
         status_changes = []
         mx_changes = []
         ssl_changes = []
+        no_previous_scan = []
 
         for site_id, site_name in websites:
             cursor.execute(
@@ -2382,6 +2377,7 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
             )
             rows = cursor.fetchall()
             if len(rows) < 2:
+                no_previous_scan.append([site_name, "No previous scan"])
                 continue
             latest, previous = rows[0], rows[1]
 
@@ -2420,6 +2416,12 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
 
         with open(file_path, "w", newline="") as f:
             writer = csv.writer(f)
+            writer.writerow(["No Previous Scan"])
+            writer.writerow(["Website", "Note"])
+            for row in no_previous_scan:
+                writer.writerow(row)
+            writer.writerow([])
+
             writer.writerow(["Status Changes"])
             writer.writerow(["Website", "Previous Status Code", "Current Status Code"])
             for row in status_changes:
