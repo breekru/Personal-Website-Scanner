@@ -22,6 +22,15 @@ import warnings
 from urllib3.exceptions import InsecureRequestWarning
 warnings.filterwarnings('ignore', category=InsecureRequestWarning)
 
+
+def get_whois_info(domain):
+    """Retrieve WHOIS information using whichever whois library is available."""
+    if hasattr(whois, "whois"):
+        return whois.whois(domain)
+    if hasattr(whois, "query"):
+        return whois.query(domain)
+    raise AttributeError("whois module has no whois or query function")
+
 class WebsiteVerificationTool:
     def __init__(self, root):
         self.root = root
@@ -704,8 +713,11 @@ class WebsiteVerificationTool:
             # 1. Registrar check using whois
             try:
                 print("Checking whois...")
-                w = whois.whois(domain)
-                result['registrar'] = str(w.registrar) if w.registrar else 'Unknown'
+                w = get_whois_info(domain)
+                registrar = getattr(w, 'registrar', None)
+                if isinstance(registrar, list):
+                    registrar = registrar[0]
+                result['registrar'] = str(registrar) if registrar else 'Unknown'
                 print(f"  Registrar: {result['registrar']}")
             except Exception as whois_error:
                 result['registrar'] = 'Whois lookup failed'
@@ -1120,14 +1132,16 @@ class WebsiteVerificationTool:
             
             # Check domain age (simplified)
             try:
-                w = whois.whois(domain)
-                if w.creation_date:
-                    creation_date = w.creation_date[0] if isinstance(w.creation_date, list) else w.creation_date
+                w = get_whois_info(domain)
+                creation_date = getattr(w, 'creation_date', None)
+                if isinstance(creation_date, list):
+                    creation_date = creation_date[0]
+                if creation_date:
                     age_days = (datetime.now() - creation_date).days
                     checks['domain_age_days'] = age_days
                     if age_days < 30:
                         checks['new_domain_warning'] = "Domain is less than 30 days old"
-            except:
+            except Exception:
                 pass
             
             # Check for HTTPS redirect
@@ -1610,10 +1624,13 @@ Additional Checks: {scan[12]}
 def install_requirements():
     """Install required packages"""
     required_packages = ['requests', 'python-whois']
-    
+
     for package in required_packages:
         try:
-            __import__(package.replace('-', '_'))
+            if package == 'python-whois':
+                __import__('whois')
+            else:
+                __import__(package.replace('-', '_'))
         except ImportError:
             print(f"Installing {package}...")
             subprocess.check_call([sys.executable, "-m", "pip", "install", package])
