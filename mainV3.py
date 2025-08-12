@@ -78,6 +78,9 @@ class WebsiteVerificationTool:
         # Storage for last comparison report
         self.last_scan_diff_rows = []
 
+        # Track buttons placed in the websites tree
+        self.comment_buttons = {}
+
         self.setup_ui()
         self.apply_theme(self.settings.get('theme', 'light'))
         self.load_websites()
@@ -956,7 +959,7 @@ class WebsiteVerificationTool:
                 self.websites_tree,
                 text="Comments",
                 style="Comment.TButton",
-                command=lambda w_id=website_id: self.show_website_details_window(w_id, focus_comments=True)
+                command=lambda w_id=website_id: self.show_comments_dialog(w_id)
             )
             self.comment_buttons[item_id] = btn
             self.position_comment_buttons()
@@ -2235,56 +2238,43 @@ class WebsiteVerificationTool:
         """Apply filters to scan results"""
         self.load_scan_results()  # For now, just reload all
     
-
     def view_website_details(self, event=None):
         """View detailed information for selected website"""
         selection = self.websites_tree.selection()
         if not selection:
             return
-
+        
         website_id = int(selection[0])
         self.show_website_details_window(website_id)
-
-    def show_website_details_window(self, website_id, focus_comments=False):
-        """Show detailed window for website with embedded comments section."""
+    
+    def show_website_details_window(self, website_id):
+        """Show detailed window for website"""
         details_window = tk.Toplevel(self.root)
         details_window.title("Website Details")
         details_window.geometry("800x600")
         details_window.transient(self.root)
-
-        # Notebook to separate details and comments
-        notebook = ttk.Notebook(details_window)
-        notebook.pack(fill=tk.BOTH, expand=True)
-
-        details_tab = ttk.Frame(notebook)
-        comments_tab = ttk.Frame(notebook)
-        notebook.add(details_tab, text="Details")
-        notebook.add(comments_tab, text="Comments")
-
-        if focus_comments:
-            notebook.select(comments_tab)
-
+        
         # Get website and scan data
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-
+        
         cursor.execute("SELECT * FROM websites WHERE id = ?", (website_id,))
         website = cursor.fetchone()
-
+        
         cursor.execute('''
-            SELECT * FROM scan_results WHERE website_id = ?
+            SELECT * FROM scan_results WHERE website_id = ? 
             ORDER BY scan_date DESC LIMIT 10
         ''', (website_id,))
         scans = cursor.fetchall()
         conn.close()
-
+        
         if not website:
             return
-
-        # --- Details tab ---
-        info_frame = ttk.LabelFrame(details_tab, text="Website Information", padding=10)
+        
+        # Website info
+        info_frame = ttk.LabelFrame(details_window, text="Website Information", padding=10)
         info_frame.pack(fill=tk.X, padx=10, pady=10)
-
+        
         ttk.Label(info_frame, text=f"URL: {website[1]}").pack(anchor='w')
         ttk.Label(info_frame, text=f"Added: {website[3]}").pack(anchor='w')
         ttk.Label(info_frame, text=f"Last Checked: {website[4] or 'Never'}").pack(anchor='w')
@@ -2311,15 +2301,16 @@ class WebsiteVerificationTool:
                         command=on_safe_toggle).pack(side=tk.LEFT, padx=5)
         ttk.Checkbutton(toggle_frame, text="High Risk", variable=high_risk_var,
                         command=on_high_risk_toggle).pack(side=tk.LEFT, padx=5)
-
-        scans_frame = ttk.LabelFrame(details_tab, text="Recent Scans", padding=10)
+        
+        # Recent scans
+        scans_frame = ttk.LabelFrame(details_window, text="Recent Scans", padding=10)
         scans_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
+        
         scan_text = scrolledtext.ScrolledText(scans_frame, height=20)
         scan_text.pack(fill=tk.BOTH, expand=True)
-
-        # Database column order: id, website_id, scan_date, registrar, page_title, status_code,
-        # ssl_valid, ssl_issuer, ssl_expiry, source_code_hash, changes_detected, risk_score,
+        
+        # Database column order: id, website_id, scan_date, registrar, page_title, status_code, 
+        # ssl_valid, ssl_issuer, ssl_expiry, source_code_hash, changes_detected, risk_score, 
         # mx_record_count, mx_records, mx_check_status, additional_checks
         for scan in scans:
             mx_info = ""
@@ -2328,8 +2319,9 @@ class WebsiteVerificationTool:
                 mx_records = scan[13] if len(scan) > 13 and scan[13] else "None"
                 mx_status = scan[14] if len(scan) > 14 and scan[14] else "not_checked"
                 mx_info = f"MX Records ({mx_count}): {mx_records}\nMX Check Status: {mx_status}\n"
-
-            scan_info = f"""Scan Date: {scan[2]}
+            
+            scan_info = f"""
+Scan Date: {scan[2]}
 Status Code: {scan[5]}
 Page Title: {scan[4]}
 SSL Valid: {'Yes' if scan[6] else 'No'}
@@ -2343,16 +2335,31 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
 {'='*50}
 """
             scan_text.insert(tk.END, scan_info)
-
+        
         scan_text.config(state='disabled')
 
-        # --- Comments tab ---
-        form = ttk.Frame(comments_tab, padding=10)
+    def show_comments_dialog(self, website_id):
+        """Display dialog for viewing and managing comments for a website."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT url FROM websites WHERE id = ?", (website_id,))
+        row = cursor.fetchone()
+        conn.close()
+        website_url = row[0] if row else ''
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title(f"Comments for {website_url}")
+        dialog.geometry("600x400")
+        dialog.transient(self.root)
+
+        form = ttk.Frame(dialog, padding=10)
         form.pack(fill=tk.X)
 
         ttk.Label(form, text="Date:").grid(row=0, column=0, sticky='w')
         if HAS_TKCALENDAR:
+
             date_entry = DateEntry(form, width=12, state='readonly')
+
             date_entry.set_date(datetime.now())
         else:
             date_entry = ttk.Entry(form, width=15)
@@ -2367,22 +2374,6 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
         comment_text = scrolledtext.ScrolledText(form, width=50, height=4)
         comment_text.grid(row=1, column=1, columnspan=3, padx=5, pady=5, sticky='w')
 
-        list_frame = ttk.Frame(comments_tab, padding=10)
-        list_frame.pack(fill=tk.BOTH, expand=True)
-
-        columns = ('Date', 'Name', 'Comment')
-        comments_tree = ttk.Treeview(list_frame, columns=columns, show='headings')
-        for col in columns:
-            comments_tree.heading(col, text=col)
-        comments_tree.column('Date', width=90)
-        comments_tree.column('Name', width=100)
-        comments_tree.column('Comment', width=250)
-        comments_tree.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
-
-        scrollbar = ttk.Scrollbar(list_frame, orient='vertical', command=comments_tree.yview)
-        comments_tree.configure(yscrollcommand=scrollbar.set)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
         def load_comments():
             for item in comments_tree.get_children():
                 comments_tree.delete(item)
@@ -2390,10 +2381,10 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
             cur = conn.cursor()
             cur.execute(
                 "SELECT id, comment_date, name, comment FROM comments WHERE website_id = ? ORDER BY comment_date DESC",
-                (website_id,),
+                (website_id,)
             )
             for cid, cdate, cname, ctext in cur.fetchall():
-                comments_tree.insert('', tk.END, iid=str(cid), values=(cdate, cname, ctext))
+                comments_tree.insert('', tk.END, iid=str(cid), values=(cdate, cname, ctext, 'Edit', 'Delete'))
             conn.close()
 
         def add_comment():
@@ -2407,33 +2398,69 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
             cur = conn.cursor()
             cur.execute(
                 "INSERT INTO comments (website_id, comment_date, name, comment) VALUES (?, ?, ?, ?)",
-                (website_id, date_val, name_val, comment_val),
+                (website_id, date_val, name_val, comment_val)
             )
             conn.commit()
             conn.close()
             comment_text.delete("1.0", tk.END)
             load_comments()
-            self.load_websites()
 
-        ttk.Button(form, text="Add Comment", command=add_comment).grid(row=2, column=0, columnspan=4, pady=5)
+        ttk.Button(form, text="Add", command=add_comment).grid(row=2, column=0, columnspan=4, pady=5)
+
+        list_frame = ttk.Frame(dialog, padding=10)
+        list_frame.pack(fill=tk.BOTH, expand=True)
+
+        columns = ('Date', 'Name', 'Comment', 'Edit', 'Delete')
+        comments_tree = ttk.Treeview(list_frame, columns=columns, show='headings')
+        for col in columns:
+            comments_tree.heading(col, text=col)
+        comments_tree.column('Date', width=90)
+        comments_tree.column('Name', width=100)
+        comments_tree.column('Comment', width=250)
+        comments_tree.column('Edit', width=50, anchor='center')
+        comments_tree.column('Delete', width=60, anchor='center')
+        comments_tree.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
+
+        scrollbar = ttk.Scrollbar(list_frame, orient='vertical', command=comments_tree.yview)
+        comments_tree.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        def on_tree_click(event):
+            region = comments_tree.identify_region(event.x, event.y)
+            if region != 'cell':
+                return
+            column = comments_tree.identify_column(event.x)
+            row_id = comments_tree.identify_row(event.y)
+            if not row_id:
+                return
+            col_name = comments_tree["columns"][int(column[1:]) - 1]
+            comment_id = int(row_id)
+            if col_name == 'Edit':
+                edit_comment(comment_id)
+            elif col_name == 'Delete':
+                delete_comment(comment_id)
+
+        comments_tree.bind('<Button-1>', on_tree_click)
 
         def edit_comment(comment_id):
             conn = sqlite3.connect(self.db_path)
             cur = conn.cursor()
             cur.execute(
                 "SELECT comment_date, name, comment FROM comments WHERE id = ?",
-                (comment_id,),
+                (comment_id,)
             )
             row = cur.fetchone()
             conn.close()
             if not row:
                 return
-            edit_win = tk.Toplevel(details_window)
+            edit_win = tk.Toplevel(dialog)
             edit_win.title("Edit Comment")
 
             ttk.Label(edit_win, text="Date:").grid(row=0, column=0, sticky='w')
             if HAS_TKCALENDAR:
+
                 e_date = DateEntry(edit_win, width=12, state='readonly')
+
                 try:
                     e_date.set_date(datetime.strptime(row[0], "%Y-%m-%d"))
                 except Exception:
@@ -2464,13 +2491,12 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
                 cur = conn.cursor()
                 cur.execute(
                     "UPDATE comments SET comment_date = ?, name = ?, comment = ? WHERE id = ?",
-                    (date_val, name_val, comment_val, comment_id),
+                    (date_val, name_val, comment_val, comment_id)
                 )
                 conn.commit()
                 conn.close()
                 edit_win.destroy()
                 load_comments()
-                self.load_websites()
 
             ttk.Button(edit_win, text="Save", command=save_edit).grid(row=2, column=0, columnspan=4, pady=5)
 
@@ -2483,26 +2509,6 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
             conn.commit()
             conn.close()
             load_comments()
-            self.load_websites()
-
-        def on_tree_double_click(event):
-            item = comments_tree.selection()
-            if item:
-                edit_comment(int(item[0]))
-
-        comments_tree.bind('<Double-1>', on_tree_double_click)
-
-        menu = tk.Menu(comments_tab, tearoff=0)
-        menu.add_command(label="Edit", command=lambda: edit_comment(int(comments_tree.selection()[0])))
-        menu.add_command(label="Delete", command=lambda: delete_comment(int(comments_tree.selection()[0])))
-
-        def on_right_click(event):
-            iid = comments_tree.identify_row(event.y)
-            if iid:
-                comments_tree.selection_set(iid)
-                menu.tk_popup(event.x_root, event.y_root)
-
-        comments_tree.bind('<Button-3>', on_right_click)
 
         load_comments()
 
