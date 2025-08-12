@@ -581,8 +581,10 @@ class WebsiteVerificationTool:
 
     def browse_db_path(self):
         """Browse for a database file"""
-        path = filedialog.asksaveasfilename(defaultextension=".db",
-                                            filetypes=[("SQLite Database", "*.db"), ("All Files", "*.*")])
+
+        path = filedialog.askopenfilename(defaultextension=".db",
+                                          filetypes=[("SQLite Database", "*.db"), ("All Files", "*.*")])
+
         if path:
             self.db_path_entry.delete(0, tk.END)
             self.db_path_entry.insert(0, path)
