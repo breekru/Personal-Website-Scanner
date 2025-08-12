@@ -991,7 +991,8 @@ class WebsiteVerificationTool:
         # Configure tags for color coding (enhanced with MX warning tag and manual status)
         self.websites_tree.tag_configure('safe_manual', background='#bbdefb')
         self.websites_tree.tag_configure('high_risk_manual', background='#b71c1c', foreground='white')
-        self.websites_tree.tag_configure('high_risk', background='#ffebee')  # Light red
+        # Use deep red with white text for high-risk entries
+        self.websites_tree.tag_configure('high_risk', background='#b71c1c', foreground='white')
         self.websites_tree.tag_configure('medium_risk', background='#fff3e0')  # Light orange
         self.websites_tree.tag_configure('low_risk', background='#e8f5e8')  # Light green
 
