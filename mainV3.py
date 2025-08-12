@@ -9,7 +9,6 @@ import hashlib
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from email.mime.application import MIMEApplication
 from datetime import datetime, timedelta
 import threading
 import concurrent.futures
@@ -2233,40 +2232,30 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
 
         messagebox.showinfo("Success", "Settings saved successfully")
     
-    def send_notification_email(self, subject, body, attachments=None):
+    def send_notification_email(self, subject, body):
         """Send notification email"""
         try:
             if not self.settings.get('notification_emails'):
                 return
-
+            
             msg = MIMEMultipart()
             msg['From'] = self.settings['email_username']
             msg['To'] = self.settings['notification_emails']
             msg['Subject'] = subject
-
+            
             msg.attach(MIMEText(body, 'plain'))
-
-            if attachments:
-                for path in attachments:
-                    try:
-                        with open(path, 'rb') as f:
-                            part = MIMEApplication(f.read())
-                        part.add_header('Content-Disposition', 'attachment', filename=os.path.basename(path))
-                        msg.attach(part)
-                    except Exception as e:
-                        print(f"Failed to attach file {path}: {e}")
-
-            server = smtplib.SMTP(self.settings['email_smtp_server'],
+            
+            server = smtplib.SMTP(self.settings['email_smtp_server'], 
                                  int(self.settings['email_smtp_port']))
             server.starttls()
-            server.login(self.settings['email_username'],
+            server.login(self.settings['email_username'], 
                         self.settings['email_password'])
-
+            
             text = msg.as_string()
-            server.sendmail(self.settings['email_username'],
+            server.sendmail(self.settings['email_username'], 
                            self.settings['notification_emails'], text)
             server.quit()
-
+            
         except Exception as e:
             print(f"Failed to send email: {str(e)}")
     
@@ -2586,18 +2575,7 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
         
         # Send email notification if enabled
         if self.settings.get('notification_emails'):
-            attachments = []
-            try:
-                csv_path = self.generate_scan_summary_csv()
-                if csv_path and os.path.exists(csv_path):
-                    attachments.append(csv_path)
-            except Exception as e:
-                print(f"Failed to generate summary CSV: {e}")
-            self.send_notification_email(
-                "Weekly Website Security Summary",
-                report,
-                attachments=attachments if attachments else None,
-            )
+            self.send_notification_email("Weekly Website Security Summary", report)
 
 def install_requirements():
     """Install required packages"""
