@@ -11,6 +11,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
 import threading
+import concurrent.futures
 import os
 import json
 import shutil
@@ -159,7 +160,7 @@ class WebsiteVerificationTool:
         cursor.execute("SELECT key, value FROM settings")
         settings_data = dict(cursor.fetchall())
         
-        # Default settings - UPDATED to include retry settings and theme
+        # Default settings - UPDATED to include retry settings, theme, and threading
         defaults = {
             'email_smtp_server': 'smtp.gmail.com',
             'email_smtp_port': '587',
@@ -170,7 +171,8 @@ class WebsiteVerificationTool:
             'github_repo': '',
             'scan_retries': '5',  # NEW: Default 5 retries
             'retry_delay_seconds': '3',  # NEW: Default 3 second delay
-            'theme': 'light'
+            'theme': 'light',
+            'scan_threads': '5'  # NEW: Default number of concurrent scan threads
         }
         
         for key, default_value in defaults.items():
@@ -897,18 +899,21 @@ class WebsiteVerificationTool:
         
         return mx_result
     
-    def scan_website(self, website_id, url):
+    def scan_website(self, website_id, url, conn=None):
         """Perform comprehensive scan of a website with improved change detection and MX checks"""
         try:
             print(f"Scanning website: {url}")
-            
-            # Get previous scan for comparison - UPDATED to include MX data
-            conn = sqlite3.connect(self.db_path)
+
+            external_conn = conn is not None
+            if not external_conn:
+                conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
+
+            # Get previous scan for comparison - UPDATED to include MX data
             cursor.execute('''
-                SELECT source_code_hash, page_title, registrar, additional_checks, 
-                       mx_record_count, mx_records FROM scan_results 
-                WHERE website_id = ? 
+                SELECT source_code_hash, page_title, registrar, additional_checks,
+                       mx_record_count, mx_records FROM scan_results
+                WHERE website_id = ?
                 ORDER BY scan_date DESC LIMIT 1
             ''', (website_id,))
             
@@ -1058,13 +1063,13 @@ class WebsiteVerificationTool:
             
             # Save results to database - UPDATED to include MX data
             cursor.execute('''
-                INSERT INTO scan_results 
-                (website_id, registrar, page_title, status_code, ssl_valid, 
-                ssl_issuer, ssl_expiry, source_code_hash, changes_detected, 
+                INSERT INTO scan_results
+                (website_id, registrar, page_title, status_code, ssl_valid,
+                ssl_issuer, ssl_expiry, source_code_hash, changes_detected,
                 risk_score, mx_record_count, mx_records, mx_check_status, additional_checks)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
-                scan_result['website_id'], scan_result['registrar'], 
+                scan_result['website_id'], scan_result['registrar'],
                 scan_result['page_title'], scan_result['status_code'],
                 scan_result['ssl_valid'], scan_result['ssl_issuer'],
                 scan_result['ssl_expiry'], scan_result['source_code_hash'],
@@ -1073,15 +1078,16 @@ class WebsiteVerificationTool:
                 scan_result.get('mx_check_status', 'not_checked'),
                 json.dumps(scan_result.get('additional_checks', {}))
             ))
-            
+
             # Update website last_checked timestamp
             cursor.execute('''
                 UPDATE websites SET last_checked = CURRENT_TIMESTAMP, status = ?
                 WHERE id = ?
             ''', ('scanned', website_id))
-            
+
             conn.commit()
-            conn.close()
+            if not external_conn:
+                conn.close()
             
             # Send notifications based on change type and risk
             if changes_detected:
@@ -1094,102 +1100,105 @@ class WebsiteVerificationTool:
             print(f"Error scanning {url}: {str(e)}")
             # Save error result
             try:
-                conn = sqlite3.connect(self.db_path)
-                cursor = conn.cursor()
-                cursor.execute('''
-                    INSERT INTO scan_results 
+                err_conn = conn if conn is not None else sqlite3.connect(self.db_path)
+                err_cursor = err_conn.cursor()
+                err_cursor.execute('''
+                    INSERT INTO scan_results
                     (website_id, additional_checks)
                     VALUES (?, ?)
                 ''', (website_id, json.dumps({'scan_error': str(e)})))
-                conn.commit()
-                conn.close()
-            except:
+                err_conn.commit()
+                if conn is None:
+                    err_conn.close()
+            except Exception:
                 pass
             return None
 
     def scan_website_with_retries(self, website_id, url):
         """Perform website scan with configurable retry logic"""
         import time
-        
-        max_retries = int(self.settings.get('scan_retries', 5))
-        retry_delay = int(self.settings.get('retry_delay_seconds', 3))
-        
-        print(f"Starting scan for {url} (max retries: {max_retries}, delay: {retry_delay}s)")
-        
-        last_error = None
 
-        for attempt in range(max_retries + 1):  # +1 because we want initial attempt + retries
-            if self.scan_cancelled:
-                print("  Scan cancelled during retries")
-                return None
-            try:
-                if attempt > 0:
-                    print(f"  Retry attempt {attempt}/{max_retries} for {url}")
-                    time.sleep(retry_delay)
-                else:
-                    print(f"  Initial scan attempt for {url}")
-                
-                # Call the original scan method
-                result = self.scan_website(website_id, url)
-                
-                if result is not None:
-                    # Check if scan was successful (no major errors)
-                    additional_checks = result.get('additional_checks', {})
-                    
-                    # Define what constitutes a "retry-worthy" error
-                    retry_worthy_errors = ['scan_error', 'http_error', 'ssl_error']
-                    has_retry_worthy_error = any(error in additional_checks for error in retry_worthy_errors)
-                    
-                    # If no retry-worthy errors, consider it successful
-                    if not has_retry_worthy_error:
-                        if attempt > 0:
-                            print(f"  ✓ Scan succeeded on retry attempt {attempt} for {url}")
-                        else:
-                            print(f"  ✓ Scan succeeded on first attempt for {url}")
-                        return result
-                    else:
-                        # Log the error but continue to retry
-                        error_details = [f"{k}: {v}" for k, v in additional_checks.items() if k in retry_worthy_errors]
-                        print(f"  ⚠ Scan completed with errors on attempt {attempt + 1}: {'; '.join(error_details)}")
-                        last_error = f"Scan errors: {'; '.join(error_details)}"
-                        
-                        # If this was our last attempt, we'll save this result anyway
-                        if attempt == max_retries:
-                            print(f"  ✗ Max retries reached for {url}, saving last result with errors")
-                            return result
-                else:
-                    # Scan returned None (complete failure)
-                    last_error = "Scan returned None - complete failure"
-                    print(f"  ✗ Complete scan failure on attempt {attempt + 1} for {url}")
-                    
-            except Exception as e:
-                last_error = str(e)
-                print(f"  ✗ Exception on attempt {attempt + 1} for {url}: {last_error}")
-                
-                # If this was our last attempt, save the error
-                if attempt == max_retries:
-                    print(f"  ✗ Max retries reached for {url}, saving error result")
-                    try:
-                        conn = sqlite3.connect(self.db_path)
-                        cursor = conn.cursor()
-                        cursor.execute('''
-                            INSERT INTO scan_results 
-                            (website_id, additional_checks)
-                            VALUES (?, ?)
-                        ''', (website_id, json.dumps({
-                            'scan_error': f'Failed after {max_retries} retries: {last_error}',
-                            'retry_attempts': max_retries,
-                            'final_error': last_error
-                        })))
-                        conn.commit()
-                        conn.close()
-                    except Exception as db_error:
-                        print(f"  ✗ Failed to save error result: {db_error}")
+        conn = sqlite3.connect(self.db_path)
+        try:
+            max_retries = int(self.settings.get('scan_retries', 5))
+            retry_delay = int(self.settings.get('retry_delay_seconds', 3))
+
+            print(f"Starting scan for {url} (max retries: {max_retries}, delay: {retry_delay}s)")
+
+            last_error = None
+
+            for attempt in range(max_retries + 1):  # +1 because we want initial attempt + retries
+                if self.scan_cancelled:
+                    print("  Scan cancelled during retries")
                     return None
-        
-        # This should never be reached, but just in case
-        print(f"  ✗ Unexpected end of retry loop for {url}")
-        return None
+                try:
+                    if attempt > 0:
+                        print(f"  Retry attempt {attempt}/{max_retries} for {url}")
+                        time.sleep(retry_delay)
+                    else:
+                        print(f"  Initial scan attempt for {url}")
+
+                    # Call the original scan method
+                    result = self.scan_website(website_id, url, conn)
+
+                    if result is not None:
+                        # Check if scan was successful (no major errors)
+                        additional_checks = result.get('additional_checks', {})
+
+                        # Define what constitutes a "retry-worthy" error
+                        retry_worthy_errors = ['scan_error', 'http_error', 'ssl_error']
+                        has_retry_worthy_error = any(error in additional_checks for error in retry_worthy_errors)
+
+                        # If no retry-worthy errors, consider it successful
+                        if not has_retry_worthy_error:
+                            if attempt > 0:
+                                print(f"  ✓ Scan succeeded on retry attempt {attempt} for {url}")
+                            else:
+                                print(f"  ✓ Scan succeeded on first attempt for {url}")
+                            return result
+                        else:
+                            # Log the error but continue to retry
+                            error_details = [f"{k}: {v}" for k, v in additional_checks.items() if k in retry_worthy_errors]
+                            print(f"  ⚠ Scan completed with errors on attempt {attempt + 1}: {'; '.join(error_details)}")
+                            last_error = f"Scan errors: {'; '.join(error_details)}"
+
+                            # If this was our last attempt, we'll save this result anyway
+                            if attempt == max_retries:
+                                print(f"  ✗ Max retries reached for {url}, saving last result with errors")
+                                return result
+                    else:
+                        # Scan returned None (complete failure)
+                        last_error = "Scan returned None - complete failure"
+                        print(f"  ✗ Complete scan failure on attempt {attempt + 1} for {url}")
+
+                except Exception as e:
+                    last_error = str(e)
+                    print(f"  ✗ Exception on attempt {attempt + 1} for {url}: {last_error}")
+
+                    # If this was our last attempt, save the error
+                    if attempt == max_retries:
+                        print(f"  ✗ Max retries reached for {url}, saving error result")
+                        try:
+                            cursor = conn.cursor()
+                            cursor.execute('''
+                                INSERT INTO scan_results
+                                (website_id, additional_checks)
+                                VALUES (?, ?)
+                            ''', (website_id, json.dumps({
+                                'scan_error': f'Failed after {max_retries} retries: {last_error}',
+                                'retry_attempts': max_retries,
+                                'final_error': last_error
+                            })))
+                            conn.commit()
+                        except Exception as db_error:
+                            print(f"  ✗ Failed to save error result: {db_error}")
+                        return None
+
+            # This should never be reached, but just in case
+            print(f"  ✗ Unexpected end of retry loop for {url}")
+            return None
+        finally:
+            conn.close()
 
     def send_change_notification(self, url, scan_result, change_details):
         """Send notification about detected changes (only for moderate/major changes) including MX changes"""
@@ -1829,7 +1838,7 @@ class WebsiteVerificationTool:
         self.root.after(2000, self.reset_scan_progress)
 
     def scan_all_websites(self):
-        """Scan all websites in separate thread with retry logic"""
+        """Scan all websites using a thread pool"""
         if self.is_scanning:
             return
         self.is_scanning = True
@@ -1844,22 +1853,36 @@ class WebsiteVerificationTool:
 
             total_websites = len(websites)
             self.root.after(0, lambda: self.start_scan_progress(total_websites))
-            for i, (website_id, url) in enumerate(websites, 1):
-                if self.scan_cancelled:
-                    break
-                print(f"\n--- Scanning {i}/{total_websites}: {url} ---")
-                self.scan_website_with_retries(website_id, url)
-                self.root.after(0, self.load_websites)
-                self.root.after(0, self.load_scan_results)
-                self.root.after(0, lambda i=i: self.update_scan_progress(i, total_websites))
 
-            self.root.after(0, lambda: self.finish_scan(total_websites, self.scan_cancelled))
+            max_workers = int(self.settings.get('scan_threads', 5))
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+            futures = [executor.submit(self.scan_website_with_retries, wid, url) for wid, url in websites]
+
+            completed = 0
+            try:
+                for future in concurrent.futures.as_completed(futures):
+                    if self.scan_cancelled:
+                        executor.shutdown(cancel_futures=True)
+                        self.root.after(0, lambda: self.scan_status_label.config(text="Scan cancelled"))
+                        break
+                    try:
+                        future.result()
+                    except Exception as e:
+                        print(f"Error scanning: {e}")
+                    completed += 1
+                    self.root.after(0, self.load_websites)
+                    self.root.after(0, self.load_scan_results)
+                    self.root.after(0, lambda c=completed: self.update_scan_progress(c, total_websites))
+            finally:
+                if not self.scan_cancelled:
+                    executor.shutdown()
+                self.root.after(0, lambda: self.finish_scan(total_websites, self.scan_cancelled))
 
         threading.Thread(target=scan_thread, daemon=True).start()
 
         
     def scan_selected(self):
-        """Scan selected websites with retry logic"""
+        """Scan selected websites using a thread pool"""
         selection = self.websites_tree.selection()
         if not selection:
             messagebox.showwarning("Warning", "Please select websites to scan")
@@ -1873,18 +1896,34 @@ class WebsiteVerificationTool:
         def scan_thread():
             total_selected = len(selection)
             self.root.after(0, lambda: self.start_scan_progress(total_selected))
-            for i, item in enumerate(selection, 1):
-                if self.scan_cancelled:
-                    break
+
+            max_workers = int(self.settings.get('scan_threads', 5))
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+            futures = []
+            for item in selection:
                 values = self.websites_tree.item(item)['values']
                 website_id, url = values[0], values[2]
-                print(f"\n--- Scanning {i}/{total_selected}: {url} ---")
-                self.scan_website_with_retries(website_id, url)
-                self.root.after(0, self.load_websites)
-                self.root.after(0, self.load_scan_results)
-                self.root.after(0, lambda i=i: self.update_scan_progress(i, total_selected))
+                futures.append(executor.submit(self.scan_website_with_retries, website_id, url))
 
-            self.root.after(0, lambda: self.finish_scan(total_selected, self.scan_cancelled))
+            completed = 0
+            try:
+                for future in concurrent.futures.as_completed(futures):
+                    if self.scan_cancelled:
+                        executor.shutdown(cancel_futures=True)
+                        self.root.after(0, lambda: self.scan_status_label.config(text="Scan cancelled"))
+                        break
+                    try:
+                        future.result()
+                    except Exception as e:
+                        print(f"Error scanning: {e}")
+                    completed += 1
+                    self.root.after(0, self.load_websites)
+                    self.root.after(0, self.load_scan_results)
+                    self.root.after(0, lambda c=completed: self.update_scan_progress(c, total_selected))
+            finally:
+                if not self.scan_cancelled:
+                    executor.shutdown()
+                self.root.after(0, lambda: self.finish_scan(total_selected, self.scan_cancelled))
 
         threading.Thread(target=scan_thread, daemon=True).start()
         
