@@ -383,12 +383,8 @@ class WebsiteVerificationTool:
         ttk.Label(add_frame, text="URL:").grid(row=0, column=0, sticky='w')
         self.url_entry = ttk.Entry(add_frame, width=50)
         self.url_entry.grid(row=0, column=1, padx=5)
-        
-        ttk.Label(add_frame, text="Name:").grid(row=0, column=2, sticky='w', padx=(20, 0))
-        self.name_entry = ttk.Entry(add_frame, width=30)
-        self.name_entry.grid(row=0, column=3, padx=5)
-        
-        ttk.Button(add_frame, text="Add Website", command=self.add_website).grid(row=0, column=4, padx=10)
+
+        ttk.Button(add_frame, text="Add Website", command=self.add_website).grid(row=0, column=2, padx=10)
         
         # Bulk operations
         bulk_frame = ttk.Frame(controls_frame)
@@ -426,14 +422,13 @@ class WebsiteVerificationTool:
 
         # Treeview for websites with comprehensive columns - UPDATED to include MX Records and Comments
         columns = (
-            'Name', 'URL', 'Last Checked', 'Status Code', 'SSL', 'Registrar',
+            'URL', 'Last Checked', 'Status Code', 'SSL', 'Registrar',
             'Domain Age', 'MX Records', 'Changes', 'Risk Score', 'Issues', 'Comments'
         )
         self.websites_tree = ttk.Treeview(list_frame, columns=columns, show='headings', selectmode='extended')
 
         # Configure column widths and headings - UPDATED to include MX Records and Comments
         column_configs = {
-            'Name': 140,  # Slightly reduced
             'URL': 200,   # Slightly reduced
             'Last Checked': 100,  # Slightly reduced
             'Status Code': 75,    # Slightly reduced
@@ -758,28 +753,26 @@ class WebsiteVerificationTool:
     def add_website(self):
         """Add a new website to monitor"""
         url = self.url_entry.get().strip()
-        name = self.name_entry.get().strip() or url
-        
+
         if not url:
             messagebox.showerror("Error", "Please enter a URL")
             return
-        
+
         # Add http if not present
         if not url.startswith(('http://', 'https://')):
             url = 'https://' + url
-        
+
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            cursor.execute("INSERT INTO websites (url, name) VALUES (?, ?)", (url, name))
+            cursor.execute("INSERT INTO websites (url) VALUES (?)", (url,))
             conn.commit()
             conn.close()
-            
+
             self.url_entry.delete(0, tk.END)
-            self.name_entry.delete(0, tk.END)
             self.load_websites()
             messagebox.showinfo("Success", f"Added {url} to monitoring list")
-            
+
         except sqlite3.IntegrityError:
             messagebox.showerror("Error", "Website already exists in database")
     
@@ -799,17 +792,17 @@ class WebsiteVerificationTool:
         # First get all websites with optional search filter
         if search_term:
             cursor.execute(
-                'SELECT id, name, url, last_checked, manual_status FROM websites '
-                'WHERE name LIKE ? OR url LIKE ? ORDER BY name',
-                (f"%{search_term}%", f"%{search_term}%")
+                'SELECT id, url, last_checked, manual_status FROM websites '
+                'WHERE url LIKE ? ORDER BY url',
+                (f"%{search_term}%",)
             )
         else:
-            cursor.execute('SELECT id, name, url, last_checked, manual_status FROM websites ORDER BY name')
+            cursor.execute('SELECT id, url, last_checked, manual_status FROM websites ORDER BY url')
         websites = cursor.fetchall()
 
         # Then get latest scan data for each website individually
         for website in websites:
-            website_id, name, url, last_checked, manual_status = website
+            website_id, url, last_checked, manual_status = website
             
             # Get the most recent scan result for this specific website - UPDATED to include MX data
             cursor.execute('''
@@ -973,7 +966,7 @@ class WebsiteVerificationTool:
             # Insert the row - UPDATED to include MX records and button placeholder
             item_id = self.websites_tree.insert(
                 '', tk.END, iid=str(website_id), text=str(website_id), values=(
-                    name, url,
+                    url,
                     last_checked[:16] if last_checked else 'Never',
                     status_display, ssl_display, registrar_display,
                     domain_age_display,  # Domain Age column
@@ -2086,7 +2079,7 @@ class WebsiteVerificationTool:
             for item in selection:
                 values = self.websites_tree.item(item)['values']
                 website_id = int(item)
-                url = values[1]
+                url = values[0]
                 futures.append(executor.submit(self.scan_website_with_retries, website_id, url))
 
             completed = 0
@@ -2178,7 +2171,7 @@ class WebsiteVerificationTool:
                             url = 'https://' + url
                         
                         try:
-                            cursor.execute("INSERT INTO websites (url, name) VALUES (?, ?)", (url, url))
+                            cursor.execute("INSERT INTO websites (url) VALUES (?)", (url,))
                             added += 1
                         except sqlite3.IntegrityError:
                             pass  # Skip duplicates
@@ -2201,7 +2194,7 @@ class WebsiteVerificationTool:
         
         # UPDATED to include MX record data
         cursor.execute('''
-            SELECT sr.scan_date, w.name, sr.status_code, sr.ssl_valid,
+            SELECT sr.scan_date, w.url, sr.status_code, sr.ssl_valid,
                    sr.registrar, sr.mx_record_count, sr.changes_detected, sr.risk_score
             FROM scan_results sr
             JOIN websites w ON sr.website_id = w.id
@@ -2218,7 +2211,7 @@ class WebsiteVerificationTool:
             
             formatted_result = (
                 result[0][:16] if result[0] else '',  # Date
-                result[1],  # Website name
+                result[1],  # Website URL
                 result[2],  # Status code
                 'Yes' if result[3] else 'No',  # SSL valid
                 result[4],  # Registrar
@@ -2273,7 +2266,6 @@ class WebsiteVerificationTool:
         info_frame = ttk.LabelFrame(details_window, text="Website Information", padding=10)
         info_frame.pack(fill=tk.X, padx=10, pady=10)
         
-        ttk.Label(info_frame, text=f"Name: {website[2]}").pack(anchor='w')
         ttk.Label(info_frame, text=f"URL: {website[1]}").pack(anchor='w')
         ttk.Label(info_frame, text=f"Added: {website[3]}").pack(anchor='w')
         ttk.Label(info_frame, text=f"Last Checked: {website[4] or 'Never'}").pack(anchor='w')
@@ -2318,13 +2310,13 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
         """Display dialog for viewing and managing comments for a website."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        cursor.execute("SELECT name FROM websites WHERE id = ?", (website_id,))
+        cursor.execute("SELECT url FROM websites WHERE id = ?", (website_id,))
         row = cursor.fetchone()
         conn.close()
-        website_name = row[0] if row else ''
+        website_url = row[0] if row else ''
 
         dialog = tk.Toplevel(self.root)
-        dialog.title(f"Comments for {website_name}")
+        dialog.title(f"Comments for {website_url}")
         dialog.geometry("600x400")
         dialog.transient(self.root)
 
@@ -2637,7 +2629,7 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
         
         # UPDATED to include MX record data
         cursor.execute('''
-            SELECT w.name, w.url, sr.risk_score, sr.scan_date,
+            SELECT w.url, sr.risk_score, sr.scan_date,
                    sr.ssl_valid, sr.changes_detected, sr.additional_checks,
                    sr.mx_record_count, sr.mx_check_status
             FROM websites w
@@ -2655,13 +2647,13 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
         report += f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
         report += "="*60 + "\n\n"
         
-        high_risk = [r for r in results if r[2] and r[2] >= 50]
-        medium_risk = [r for r in results if r[2] and 20 <= r[2] < 50]
-        low_risk = [r for r in results if r[2] and r[2] < 20]
-        
+        high_risk = [r for r in results if r[1] and r[1] >= 50]
+        medium_risk = [r for r in results if r[1] and 20 <= r[1] < 50]
+        low_risk = [r for r in results if r[1] and r[1] < 20]
+
         # NEW: MX-specific statistics
-        no_mx_sites = [r for r in results if r[7] == 0 and r[8] == 'success']
-        mx_error_sites = [r for r in results if r[8] == 'error']
+        no_mx_sites = [r for r in results if r[6] == 0 and r[7] == 'success']
+        mx_error_sites = [r for r in results if r[7] == 'error']
         
         report += f"SUMMARY:\n"
         report += f"High Risk Sites (50+): {len(high_risk)}\n"
@@ -2673,24 +2665,24 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
         if high_risk:
             report += "HIGH RISK WEBSITES:\n" + "-"*30 + "\n"
             for site in high_risk:
-                mx_status = f"MX: {site[7]} records" if site[7] else "No MX records"
-                if site[8] == 'error':
+                mx_status = f"MX: {site[6]} records" if site[6] else "No MX records"
+                if site[7] == 'error':
                     mx_status = "MX: Check failed"
-                    
-                report += f"• {site[0]} ({site[1]})\n"
-                report += f"  Risk Score: {site[2]}\n"
-                report += f"  Last Scan: {site[3]}\n"
-                report += f"  SSL Valid: {'Yes' if site[4] else 'No'}\n"
-                report += f"  Changes Detected: {'Yes' if site[5] else 'No'}\n"
+
+                report += f"• {site[0]}\n"
+                report += f"  Risk Score: {site[1]}\n"
+                report += f"  Last Scan: {site[2]}\n"
+                report += f"  SSL Valid: {'Yes' if site[3] else 'No'}\n"
+                report += f"  Changes Detected: {'Yes' if site[4] else 'No'}\n"
                 report += f"  {mx_status}\n\n"
         
         # NEW: MX-specific issues section
         if no_mx_sites or mx_error_sites:
             report += "MAIL SERVER ISSUES:\n" + "-"*30 + "\n"
             for site in no_mx_sites:
-                report += f"• {site[0]} ({site[1]}) - No MX records found\n"
+                report += f"• {site[0]} - No MX records found\n"
             for site in mx_error_sites:
-                report += f"• {site[0]} ({site[1]}) - MX check failed\n"
+                report += f"• {site[0]} - MX check failed\n"
             report += "\n"
         
         self.report_text.delete(1.0, tk.END)
@@ -2702,7 +2694,7 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
         cursor = conn.cursor()
         
         cursor.execute('''
-            SELECT w.name, w.url, sr.scan_date, sr.changes_detected, sr.risk_score
+            SELECT w.url, sr.scan_date, sr.changes_detected, sr.risk_score
             FROM websites w
             JOIN scan_results sr ON w.id = sr.website_id
             WHERE sr.changes_detected = 1
@@ -2720,9 +2712,9 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
         if results:
             report += f"RECENT CHANGES DETECTED ({len(results)} total):\n\n"
             for site in results:
-                report += f"• {site[0]} ({site[1]})\n"
-                report += f"  Change Detected: {site[2]}\n"
-                report += f"  Current Risk Score: {site[4]}\n\n"
+                report += f"• {site[0]}\n"
+                report += f"  Change Detected: {site[1]}\n"
+                report += f"  Current Risk Score: {site[3]}\n\n"
         else:
             report += "No changes detected in recent scans.\n"
         
