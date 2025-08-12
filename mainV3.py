@@ -53,6 +53,8 @@ class WebsiteVerificationTool:
         # Style initialization for modern look
         self.style = ttk.Style()
         self.style.theme_use('clam')
+        self.style.configure('Comment.TButton', padding=(6, 1), font=('Segoe UI', 8, 'bold'))
+        self.style.map('Comment.TButton', foreground=[('!disabled', '#000000')])
 
         # Configuration and database setup
         self.config_path = os.path.join(os.path.dirname(__file__), 'config.json')
@@ -968,9 +970,11 @@ class WebsiteVerificationTool:
             btn = ttk.Button(
                 self.websites_tree,
                 text="Comments",
+                style="Comment.TButton",
                 command=lambda w_id=website_id: self.show_comments_dialog(w_id)
             )
             self.comment_buttons[item_id] = btn
+            self.position_comment_buttons()
         
         conn.close()
         
