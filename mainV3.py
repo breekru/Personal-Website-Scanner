@@ -818,8 +818,19 @@ class WebsiteVerificationTool:
                 # No scan data available
                 status_code, ssl_valid, registrar, changes_detected, risk_score, additional_checks, mx_record_count, mx_check_status = 0, None, None, None, 0, '{}', 0, 'not_checked'
             
+            # Parse additional checks and detect failures
+            checks = {}
+            if additional_checks and additional_checks != '{}':
+                try:
+                    checks = json.loads(additional_checks) if isinstance(additional_checks, str) else additional_checks
+                except json.JSONDecodeError:
+                    checks = {}
+            scan_failed = any(key in checks for key in ('scan_error', 'http_error', 'rdap_error', 'domain_age_error'))
+
             # Format display values with proper handling of NULL/default values
-            if status_code == 0 or status_code is None:
+            if scan_failed and (status_code == 0 or status_code is None):
+                status_display = 'Failed Scan'
+            elif status_code == 0 or status_code is None:
                 status_display = 'Not Scanned'
             else:
                 status_display = str(status_code)
@@ -835,6 +846,8 @@ class WebsiteVerificationTool:
             # Registrar display
             if registrar and registrar not in ['Unknown', 'Whois lookup failed']:
                 registrar_display = registrar
+            elif scan_failed:
+                registrar_display = 'Failed Scan'
             elif status_code and status_code != 0:
                 registrar_display = 'Unknown'
             else:
@@ -842,31 +855,28 @@ class WebsiteVerificationTool:
             
             # Domain Age display
             domain_age_display = 'Not Scanned'
-            if additional_checks and additional_checks != '{}':
-                try:
-                    checks = json.loads(additional_checks) if isinstance(additional_checks, str) else additional_checks
-                    domain_age_days = checks.get('domain_age_days')
-                    
-                    if domain_age_days is not None:
-                        if domain_age_days < 30:
-                            domain_age_display = f"{domain_age_days}d ⚠️"  # Warning for new domains
-                        elif domain_age_days < 365:
-                            domain_age_display = f"{domain_age_days}d"
-                        elif domain_age_days < 3650:  # Less than 10 years
-                            years = domain_age_days // 365
-                            remaining_days = domain_age_days % 365
-                            if remaining_days > 30:
-                                domain_age_display = f"{years}y {remaining_days // 30}m"
-                            else:
-                                domain_age_display = f"{years}y"
-                        else:  # 10+ years
-                            years = domain_age_days // 365
-                            domain_age_display = f"{years}y+"
-                    elif status_code and status_code != 0:
-                        domain_age_display = 'Unknown'
-                except:
-                    if status_code and status_code != 0:
-                        domain_age_display = 'Unknown'
+            if scan_failed or 'domain_age_error' in checks:
+                domain_age_display = 'Failed Scan'
+            else:
+                domain_age_days = checks.get('domain_age_days') if checks else None
+
+                if domain_age_days is not None:
+                    if domain_age_days < 30:
+                        domain_age_display = f"{domain_age_days}d ⚠️"  # Warning for new domains
+                    elif domain_age_days < 365:
+                        domain_age_display = f"{domain_age_days}d"
+                    elif domain_age_days < 3650:  # Less than 10 years
+                        years = domain_age_days // 365
+                        remaining_days = domain_age_days % 365
+                        if remaining_days > 30:
+                            domain_age_display = f"{years}y {remaining_days // 30}m"
+                        else:
+                            domain_age_display = f"{years}y"
+                    else:  # 10+ years
+                        years = domain_age_days // 365
+                        domain_age_display = f"{years}y+"
+                elif status_code and status_code != 0:
+                    domain_age_display = 'Unknown'
             
             # NEW: MX Records display
             mx_display = 'Not Scanned'
@@ -901,21 +911,17 @@ class WebsiteVerificationTool:
             
             # Analyze issues from additional checks
             issues = []
-            if additional_checks and additional_checks != '{}':
-                try:
-                    checks = json.loads(additional_checks) if isinstance(additional_checks, str) else additional_checks
-                    if 'suspicious_domain' in checks:
-                        issues.append('Suspicious Domain')
-                    if 'new_domain_warning' in checks:
-                        issues.append('New Domain')
-                    if checks.get('https_redirect') == False:
-                        issues.append('No HTTPS Redirect')
-                    if 'http_error' in checks:
-                        issues.append('HTTP Error')
-                    if 'scan_error' in checks:
-                        issues.append('Scan Error')
-                except:
-                    pass
+            if checks:
+                if 'suspicious_domain' in checks:
+                    issues.append('Suspicious Domain')
+                if 'new_domain_warning' in checks:
+                    issues.append('New Domain')
+                if checks.get('https_redirect') is False:
+                    issues.append('No HTTPS Redirect')
+                if 'http_error' in checks:
+                    issues.append('HTTP Error')
+                if 'scan_error' in checks:
+                    issues.append('Scan Error')
             
             # Add scan-based issues only if actually scanned
             if status_code and status_code != 0:
@@ -1916,8 +1922,8 @@ class WebsiteVerificationTool:
                     checks['domain_age_days'] = age_days
                     if age_days < 30:
                         checks['new_domain_warning'] = "Domain is less than 30 days old"
-            except Exception:
-                pass
+            except Exception as e:
+                checks['domain_age_error'] = str(e)
             
             # Check for HTTPS redirect
             if not url.startswith('https://'):
