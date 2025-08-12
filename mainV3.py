@@ -78,6 +78,9 @@ class WebsiteVerificationTool:
         # Storage for last comparison report
         self.last_scan_diff_rows = []
 
+        # Track buttons placed in the websites tree
+        self.comment_buttons = {}
+
         self.setup_ui()
         self.apply_theme(self.settings.get('theme', 'light'))
         self.load_websites()
@@ -439,11 +442,14 @@ class WebsiteVerificationTool:
             )
             self.websites_tree.column(col, width=column_configs.get(col, 100))
         
-        # Scrollbars
-        v_scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.websites_tree.yview)
-        h_scrollbar = ttk.Scrollbar(list_frame, orient="horizontal", command=self.websites_tree.xview)
-        self.websites_tree.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
-        
+        # Scrollbars with hooks to reposition comment buttons when scrolling
+        v_scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.on_tree_yscroll)
+        h_scrollbar = ttk.Scrollbar(list_frame, orient="horizontal", command=self.on_tree_xscroll)
+        self.websites_tree.configure(
+            yscrollcommand=lambda *args: (v_scrollbar.set(*args), self.position_comment_buttons()),
+            xscrollcommand=lambda *args: (h_scrollbar.set(*args), self.position_comment_buttons())
+        )
+
         self.websites_tree.grid(row=1, column=0, sticky='nsew')
         v_scrollbar.grid(row=1, column=1, sticky='ns')
         h_scrollbar.grid(row=2, column=0, sticky='ew')
@@ -451,9 +457,11 @@ class WebsiteVerificationTool:
         list_frame.grid_rowconfigure(1, weight=1)
         list_frame.grid_columnconfigure(0, weight=1)
 
-        # Bind double-click to view details and single click for comments
+
+        # Bind double-click to view details and reposition buttons on resize
         self.websites_tree.bind('<Double-1>', self.view_website_details)
-        self.websites_tree.bind('<Button-1>', self.on_websites_tree_click)
+        self.websites_tree.bind('<Configure>', self.position_comment_buttons)
+
 
     def sort_websites_tree(self, column, reverse):
         """Sort the websites treeview by a given column."""
@@ -502,21 +510,28 @@ class WebsiteVerificationTool:
         self.last_sort_column = column
         self.last_sort_reverse = reverse
 
-    def on_websites_tree_click(self, event):
-        """Handle clicks on the websites treeview, opening comments when appropriate."""
-        region = self.websites_tree.identify_region(event.x, event.y)
-        if region != 'cell':
-            return
-        column = self.websites_tree.identify_column(event.x)
-        row_id = self.websites_tree.identify_row(event.y)
-        if not row_id:
-            return
-        col_index = int(column[1:]) - 1
-        col_name = self.websites_tree["columns"][col_index]
-        if col_name == 'Comments':
-            website_id = self.websites_tree.item(row_id)['values'][0]
-            self.show_comments_dialog(website_id)
-            return 'break'
+
+    def on_tree_yscroll(self, *args):
+        """Vertical scrollbar callback that also repositions comment buttons."""
+        self.websites_tree.yview(*args)
+        self.position_comment_buttons()
+
+    def on_tree_xscroll(self, *args):
+        """Horizontal scrollbar callback that also repositions comment buttons."""
+        self.websites_tree.xview(*args)
+        self.position_comment_buttons()
+
+    def position_comment_buttons(self, event=None):
+        """Place comment buttons over the Comments column cells."""
+        self.websites_tree.update_idletasks()
+        for item_id, btn in self.comment_buttons.items():
+            bbox = self.websites_tree.bbox(item_id, 'Comments')
+            if not bbox:
+                btn.place_forget()
+                continue
+            x, y, width, height = bbox
+            btn.place(x=x, y=y, width=width, height=height)
+
 
     def sort_results_tree(self, column, reverse):
         """Sort the scan results treeview by a given column."""
@@ -759,6 +774,11 @@ class WebsiteVerificationTool:
         for item in self.websites_tree.get_children():
             self.websites_tree.delete(item)
 
+        # Remove any existing comment buttons
+        for btn in self.comment_buttons.values():
+            btn.destroy()
+        self.comment_buttons.clear()
+
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
@@ -931,16 +951,26 @@ class WebsiteVerificationTool:
             else:
                 tag = 'low_risk'
             
-            # Insert the row - UPDATED to include MX records and Comments action
-            self.websites_tree.insert('', tk.END, values=(
+
+            # Insert the row - UPDATED to include MX records and button placeholder
+            item_id = self.websites_tree.insert('', tk.END, values=(
+
                 website_id, name, url,
                 last_checked[:16] if last_checked else 'Never',
                 status_display, ssl_display, registrar_display,
                 domain_age_display,  # Domain Age column
                 mx_display,  # NEW: MX Records column
                 changes_display, risk_display, issues_display,
-                'Comments'
+
             ), tags=(tag,))
+
+            # Overlay a button for comments on this row
+            btn = ttk.Button(
+                self.websites_tree,
+                text="Comments",
+                command=lambda w_id=website_id: self.show_comments_dialog(w_id)
+            )
+            self.comment_buttons[item_id] = btn
         
         conn.close()
         
@@ -948,6 +978,9 @@ class WebsiteVerificationTool:
         self.websites_tree.tag_configure('high_risk', background='#ffebee')  # Light red
         self.websites_tree.tag_configure('medium_risk', background='#fff3e0')  # Light orange
         self.websites_tree.tag_configure('low_risk', background='#e8f5e8')  # Light green
+
+        # Ensure comment buttons are positioned
+        self.position_comment_buttons()
         self.websites_tree.tag_configure('not_scanned', background='#f5f5f5')  # Light gray
         self.websites_tree.tag_configure('new_domain', background='#fff9c4')  # Light yellow for new domains
         self.websites_tree.tag_configure('mx_warning', background='#fce4ec')  # Light pink for MX issues
@@ -2252,7 +2285,9 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
 
         ttk.Label(form, text="Date:").grid(row=0, column=0, sticky='w')
         if HAS_TKCALENDAR:
-            date_entry = DateEntry(form, width=12)
+
+            date_entry = DateEntry(form, width=12, state='readonly')
+
             date_entry.set_date(datetime.now())
         else:
             date_entry = ttk.Entry(form, width=15)
@@ -2351,7 +2386,9 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
 
             ttk.Label(edit_win, text="Date:").grid(row=0, column=0, sticky='w')
             if HAS_TKCALENDAR:
-                e_date = DateEntry(edit_win, width=12)
+
+                e_date = DateEntry(edit_win, width=12, state='readonly')
+
                 try:
                     e_date.set_date(datetime.strptime(row[0], "%Y-%m-%d"))
                 except Exception:
