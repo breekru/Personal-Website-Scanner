@@ -1945,12 +1945,6 @@ class WebsiteVerificationTool:
                 if not self.scan_cancelled:
                     executor.shutdown()
                 self.root.after(0, lambda: self.finish_scan(total_websites, self.scan_cancelled))
-                if not self.scan_cancelled:
-                    try:
-                        csv_path = self.generate_scan_summary_csv()
-                        self.handle_scan_summary(csv_path)
-                    except Exception as e:
-                        print(f"Failed to generate summary CSV: {e}")
 
         threading.Thread(target=scan_thread, daemon=True).start()
 
@@ -1998,12 +1992,6 @@ class WebsiteVerificationTool:
                 if not self.scan_cancelled:
                     executor.shutdown()
                 self.root.after(0, lambda: self.finish_scan(total_selected, self.scan_cancelled))
-                if not self.scan_cancelled:
-                    try:
-                        csv_path = self.generate_scan_summary_csv()
-                        self.handle_scan_summary(csv_path)
-                    except Exception as e:
-                        print(f"Failed to generate summary CSV: {e}")
 
         threading.Thread(target=scan_thread, daemon=True).start()
         
@@ -2454,43 +2442,6 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
                 writer.writerow(row)
 
         return file_path
-
-    def handle_scan_summary(self, csv_path):
-        """Send or save the scan summary CSV"""
-        if not csv_path or not os.path.exists(csv_path):
-            return
-        creds = [
-            "notification_emails",
-            "email_smtp_server",
-            "email_smtp_port",
-            "email_username",
-            "email_password",
-        ]
-        if all(self.settings.get(c) for c in creds):
-            try:
-                self.send_notification_email(
-                    "Website Scan Summary",
-                    "Scan summary attached.",
-                    attachments=[csv_path],
-                )
-                self.root.after(0, lambda: messagebox.showinfo("Email Sent", "Scan summary emailed successfully."))
-            except Exception as e:
-                print(f"Failed to send email: {e}")
-        else:
-            def save_report():
-                save_path = filedialog.asksaveasfilename(
-                    defaultextension=".csv",
-                    filetypes=[("CSV files", "*.csv")],
-                    initialfile=os.path.basename(csv_path),
-                )
-                if save_path:
-                    try:
-                        shutil.copy(csv_path, save_path)
-                        messagebox.showinfo("Report Saved", f"Scan summary saved to: {save_path}")
-                    except Exception as e:
-                        messagebox.showerror("Error", f"Failed to save CSV: {e}")
-
-            self.root.after(0, save_report)
 
     def generate_risk_report(self):
         """Generate risk assessment report including MX record analysis"""
