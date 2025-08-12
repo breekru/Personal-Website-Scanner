@@ -426,14 +426,13 @@ class WebsiteVerificationTool:
 
         # Treeview for websites with comprehensive columns - UPDATED to include MX Records and Comments
         columns = (
-            'ID', 'Name', 'URL', 'Last Checked', 'Status Code', 'SSL', 'Registrar',
+            'Name', 'URL', 'Last Checked', 'Status Code', 'SSL', 'Registrar',
             'Domain Age', 'MX Records', 'Changes', 'Risk Score', 'Issues', 'Comments'
         )
         self.websites_tree = ttk.Treeview(list_frame, columns=columns, show='headings', selectmode='extended')
 
         # Configure column widths and headings - UPDATED to include MX Records and Comments
         column_configs = {
-            'ID': 40,
             'Name': 140,  # Slightly reduced
             'URL': 200,   # Slightly reduced
             'Last Checked': 100,  # Slightly reduced
@@ -972,16 +971,17 @@ class WebsiteVerificationTool:
             
 
             # Insert the row - UPDATED to include MX records and button placeholder
-            item_id = self.websites_tree.insert('', tk.END, values=(
-
-                website_id, name, url,
-                last_checked[:16] if last_checked else 'Never',
-                status_display, ssl_display, registrar_display,
-                domain_age_display,  # Domain Age column
-                mx_display,  # NEW: MX Records column
-                changes_display, risk_display, issues_display,
-
-            ), tags=(tag,))
+            item_id = self.websites_tree.insert(
+                '', tk.END, iid=str(website_id), text=str(website_id), values=(
+                    name, url,
+                    last_checked[:16] if last_checked else 'Never',
+                    status_display, ssl_display, registrar_display,
+                    domain_age_display,  # Domain Age column
+                    mx_display,  # NEW: MX Records column
+                    changes_display, risk_display, issues_display,
+                    ''
+                ), tags=(tag,)
+            )
 
             # Overlay a button for comments on this row
             btn = ttk.Button(
@@ -2085,7 +2085,8 @@ class WebsiteVerificationTool:
             futures = []
             for item in selection:
                 values = self.websites_tree.item(item)['values']
-                website_id, url = values[0], values[2]
+                website_id = int(item)
+                url = values[1]
                 futures.append(executor.submit(self.scan_website_with_retries, website_id, url))
 
             completed = 0
@@ -2122,7 +2123,7 @@ class WebsiteVerificationTool:
             cursor = conn.cursor()
             
             for item in selection:
-                website_id = self.websites_tree.item(item)['values'][0]
+                website_id = int(item)
                 cursor.execute("DELETE FROM scan_results WHERE website_id = ?", (website_id,))
                 cursor.execute("DELETE FROM websites WHERE id = ?", (website_id,))
             
@@ -2140,7 +2141,7 @@ class WebsiteVerificationTool:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         for item in selection:
-            website_id = self.websites_tree.item(item)['values'][0]
+            website_id = int(item)
             cursor.execute("UPDATE websites SET manual_status = ? WHERE id = ?", (status, website_id))
         conn.commit()
         conn.close()
@@ -2241,7 +2242,7 @@ class WebsiteVerificationTool:
         if not selection:
             return
         
-        website_id = self.websites_tree.item(selection[0])['values'][0]
+        website_id = int(selection[0])
         self.show_website_details_window(website_id)
     
     def show_website_details_window(self, website_id):

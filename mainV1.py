@@ -193,12 +193,11 @@ class WebsiteVerificationTool:
         list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
         
         # Treeview for websites with comprehensive columns
-        columns = ('ID', 'Name', 'URL', 'Last Checked', 'Status Code', 'SSL', 'Registrar', 'Changes', 'Risk Score', 'Issues')
+        columns = ('Name', 'URL', 'Last Checked', 'Status Code', 'SSL', 'Registrar', 'Changes', 'Risk Score', 'Issues')
         self.websites_tree = ttk.Treeview(list_frame, columns=columns, show='headings', selectmode='extended')
         
         # Configure column widths and headings
         column_configs = {
-            'ID': 40,
             'Name': 150,
             'URL': 250,
             'Last Checked': 120,
@@ -481,12 +480,14 @@ class WebsiteVerificationTool:
                 tag = 'low_risk'
             
             # Insert the row - this ensures exactly one row per website
-            self.websites_tree.insert('', tk.END, values=(
-                website_id, name, url, 
-                last_checked[:16] if last_checked else 'Never',
-                status_display, ssl_display, registrar_display,
-                changes_display, risk_display, issues_display
-            ), tags=(tag,))
+            self.websites_tree.insert(
+                '', tk.END, iid=str(website_id), text=str(website_id), values=(
+                    name, url,
+                    last_checked[:16] if last_checked else 'Never',
+                    status_display, ssl_display, registrar_display,
+                    changes_display, risk_display, issues_display
+                ), tags=(tag,)
+            )
         
         conn.close()
         
@@ -1224,7 +1225,8 @@ class WebsiteVerificationTool:
         def scan_thread():
             for item in selection:
                 values = self.websites_tree.item(item)['values']
-                website_id, url = values[0], values[2]
+                website_id = int(item)
+                url = values[1]
                 self.scan_website(website_id, url)
                 # Update UI after each scan
                 self.root.after(0, self.load_websites)
@@ -1247,7 +1249,7 @@ class WebsiteVerificationTool:
             cursor = conn.cursor()
             
             for item in selection:
-                website_id = self.websites_tree.item(item)['values'][0]
+                website_id = int(item)
                 cursor.execute("DELETE FROM scan_results WHERE website_id = ?", (website_id,))
                 cursor.execute("DELETE FROM websites WHERE id = ?", (website_id,))
             
@@ -1334,7 +1336,7 @@ class WebsiteVerificationTool:
         if not selection:
             return
         
-        website_id = self.websites_tree.item(selection[0])['values'][0]
+        website_id = int(selection[0])
         self.show_website_details_window(website_id)
     
     def show_website_details_window(self, website_id):
