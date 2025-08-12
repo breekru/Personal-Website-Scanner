@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 import threading
 import os
 import json
+import shutil
 import re
 from urllib.parse import urlparse
 import subprocess
@@ -35,8 +36,9 @@ class WebsiteVerificationTool:
         self.style = ttk.Style()
         self.style.theme_use('clam')
 
-        # Database setup
-        self.db_path = "website_verification.db"
+        # Configuration and database setup
+        self.config_path = os.path.join(os.path.dirname(__file__), 'config.json')
+        self.db_path = self.load_config().get('db_path', 'website_verification.db')
         self.init_database()
         self.update_database_schema()  # Ensure MX columns exist
 
@@ -106,6 +108,21 @@ class WebsiteVerificationTool:
         
         conn.commit()
         conn.close()
+
+    def load_config(self):
+        """Load configuration from config.json"""
+        if not os.path.exists(self.config_path):
+            default_config = {"db_path": "website_verification.db"}
+            with open(self.config_path, 'w') as f:
+                json.dump(default_config, f, indent=4)
+            return default_config
+        with open(self.config_path, 'r') as f:
+            return json.load(f)
+
+    def save_config(self):
+        """Save configuration to config.json"""
+        with open(self.config_path, 'w') as f:
+            json.dump({'db_path': self.db_path}, f, indent=4)
     
     def update_database_schema(self):
         """Update database schema to include MX record fields"""
@@ -475,6 +492,16 @@ class WebsiteVerificationTool:
         self.load_scan_results()
     
     def setup_settings_tab(self):
+        # Database settings
+        db_frame = ttk.LabelFrame(self.settings_frame, text="Database", padding=10)
+        db_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        ttk.Label(db_frame, text="Database Path:").grid(row=0, column=0, sticky='w')
+        self.db_path_entry = ttk.Entry(db_frame, width=50)
+        self.db_path_entry.insert(0, self.db_path)
+        self.db_path_entry.grid(row=0, column=1, padx=5)
+        ttk.Button(db_frame, text="Browse...", command=self.browse_db_path).grid(row=0, column=2, padx=5)
+
         # Email settings
         email_frame = ttk.LabelFrame(self.settings_frame, text="Email Notification Settings", padding=10)
         email_frame.pack(fill=tk.X, padx=10, pady=10)
@@ -551,7 +578,15 @@ class WebsiteVerificationTool:
         # Save button
         ttk.Button(self.settings_frame, text="Save Settings", command=self.save_settings).pack(pady=20)
 
-    
+
+    def browse_db_path(self):
+        """Browse for a database file"""
+        path = filedialog.askopenfilename(defaultextension=".db",
+                                          filetypes=[("SQLite Database", "*.db"), ("All Files", "*.*")])
+        if path:
+            self.db_path_entry.delete(0, tk.END)
+            self.db_path_entry.insert(0, path)
+
     def setup_reports_tab(self):
         # Report generation
         report_frame = ttk.LabelFrame(self.reports_frame, text="Generate Reports", padding=10)
@@ -2028,6 +2063,28 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
     
     def save_settings(self):
         """Save all settings to database"""
+
+        new_db_path = self.db_path_entry.get().strip() or self.db_path
+        if new_db_path != self.db_path:
+            migrate = False
+            if os.path.exists(self.db_path):
+                migrate = messagebox.askyesno(
+                    "Migrate Data",
+                    "Would you like to migrate existing data to the new database?"
+                )
+            if migrate:
+                try:
+                    shutil.copy(self.db_path, new_db_path)
+                except Exception as e:
+                    messagebox.showerror("Error", f"Failed to migrate database: {e}")
+                    return
+            self.db_path = new_db_path
+            self.save_config()
+            self.init_database()
+            self.update_database_schema()
+            self.settings = self.load_settings()
+            self.load_websites()
+
         settings_to_save = {
             'email_smtp_server': self.smtp_server_entry.get(),
             'email_smtp_port': self.smtp_port_entry.get(),
@@ -2040,27 +2097,27 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
             'retry_delay_seconds': self.retry_delay_entry.get(),  # NEW
             'theme': self.theme_var.get()
         }
-        
+
         # Validate retry settings
         try:
             retries = int(settings_to_save['scan_retries'])
             delay = int(settings_to_save['retry_delay_seconds'])
-            
+
             if retries < 0 or retries > 20:
                 messagebox.showerror("Error", "Scan retries must be between 0 and 20")
                 return
-            
+
             if delay < 1 or delay > 60:
                 messagebox.showerror("Error", "Retry delay must be between 1 and 60 seconds")
                 return
-                
+
         except ValueError:
             messagebox.showerror("Error", "Retry settings must be valid numbers")
             return
-        
+
         for key, value in settings_to_save.items():
             self.save_setting(key, value)
-        
+
         messagebox.showinfo("Success", "Settings saved successfully")
     
     def send_notification_email(self, subject, body):
