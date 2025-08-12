@@ -232,12 +232,11 @@ class WebsiteVerificationTool:
         list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
         
         # Treeview for websites with comprehensive columns - UPDATED to include Domain Age
-        columns = ('ID', 'Name', 'URL', 'Last Checked', 'Status Code', 'SSL', 'Registrar', 'Domain Age', 'Changes', 'Risk Score', 'Issues')
+        columns = ('Name', 'URL', 'Last Checked', 'Status Code', 'SSL', 'Registrar', 'Domain Age', 'Changes', 'Risk Score', 'Issues')
         self.websites_tree = ttk.Treeview(list_frame, columns=columns, show='headings', selectmode='extended')
         
         # Configure column widths and headings - UPDATED to include Domain Age
         column_configs = {
-            'ID': 40,
             'Name': 150,
             'URL': 220,  # Slightly reduced to make room
             'Last Checked': 110,  # Slightly reduced
@@ -564,13 +563,15 @@ class WebsiteVerificationTool:
                 tag = 'low_risk'
             
             # Insert the row - UPDATED to include domain age
-            self.websites_tree.insert('', tk.END, values=(
-                website_id, name, url, 
-                last_checked[:16] if last_checked else 'Never',
-                status_display, ssl_display, registrar_display,
-                domain_age_display,  # NEW COLUMN DATA
-                changes_display, risk_display, issues_display
-            ), tags=(tag,))
+            self.websites_tree.insert(
+                '', tk.END, iid=str(website_id), text=str(website_id), values=(
+                    name, url,
+                    last_checked[:16] if last_checked else 'Never',
+                    status_display, ssl_display, registrar_display,
+                    domain_age_display,  # NEW COLUMN DATA
+                    changes_display, risk_display, issues_display
+                ), tags=(tag,)
+            )
         
         conn.close()
         
@@ -1447,7 +1448,8 @@ class WebsiteVerificationTool:
             total_selected = len(selection)
             for i, item in enumerate(selection, 1):
                 values = self.websites_tree.item(item)['values']
-                website_id, url = values[0], values[2]
+                website_id = int(item)
+                url = values[1]
                 print(f"\n--- Scanning {i}/{total_selected}: {url} ---")
                 self.scan_website_with_retries(website_id, url)  # Use retry method
                 # Update UI after each scan
@@ -1471,7 +1473,7 @@ class WebsiteVerificationTool:
             cursor = conn.cursor()
             
             for item in selection:
-                website_id = self.websites_tree.item(item)['values'][0]
+                website_id = int(item)
                 cursor.execute("DELETE FROM scan_results WHERE website_id = ?", (website_id,))
                 cursor.execute("DELETE FROM websites WHERE id = ?", (website_id,))
             
@@ -1558,7 +1560,7 @@ class WebsiteVerificationTool:
         if not selection:
             return
         
-        website_id = self.websites_tree.item(selection[0])['values'][0]
+        website_id = int(selection[0])
         self.show_website_details_window(website_id)
     
     def show_website_details_window(self, website_id):
