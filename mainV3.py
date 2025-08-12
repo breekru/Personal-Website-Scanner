@@ -4,12 +4,11 @@ import sqlite3
 import requests
 import ssl
 import socket
-import whois
 import hashlib
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import threading
 import concurrent.futures
 import os
@@ -36,13 +35,14 @@ except Exception:
     HAS_TKCALENDAR = False
 
 
-def get_whois_info(domain):
-    """Retrieve WHOIS information using whichever whois library is available."""
-    if hasattr(whois, "whois"):
-        return whois.whois(domain)
-    if hasattr(whois, "query"):
-        return whois.query(domain)
-    raise AttributeError("whois module has no whois or query function")
+def fetch_rdap(domain):
+    """Fetch RDAP information for a domain."""
+    try:
+        response = requests.get(f"https://rdap.org/domain/{domain}", timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except Exception:
+        return None
 
 class WebsiteVerificationTool:
     def __init__(self, root):
@@ -1579,18 +1579,27 @@ class WebsiteVerificationTool:
             
             print(f"Starting checks for {url} (domain: {domain})")
             
-            # 1. Registrar check using whois
+            # 1. Registrar check using RDAP
             try:
-                print("Checking whois...")
-                w = get_whois_info(domain)
-                registrar = getattr(w, 'registrar', None)
-                if isinstance(registrar, list):
-                    registrar = registrar[0]
-                result['registrar'] = str(registrar) if registrar else 'Unknown'
+                print("Checking RDAP...")
+                rdap = fetch_rdap(domain)
+                registrar = None
+                if rdap:
+                    for entity in rdap.get('entities', []):
+                        if 'registrar' in entity.get('roles', []):
+                            vcard = entity.get('vcardArray', [])
+                            if len(vcard) > 1:
+                                for item in vcard[1]:
+                                    if item[0] == 'fn':
+                                        registrar = item[3]
+                                        break
+                            if registrar:
+                                break
+                result['registrar'] = registrar or 'Unknown'
                 print(f"  Registrar: {result['registrar']}")
-            except Exception as whois_error:
-                result['registrar'] = 'Whois lookup failed'
-                print(f"  Whois error: {whois_error}")
+            except Exception as rdap_error:
+                result['registrar'] = 'RDAP lookup failed'
+                print(f"  RDAP error: {rdap_error}")
             
             # 2. NEW: MX Record check
             print("Checking MX records...")
@@ -1891,14 +1900,19 @@ class WebsiteVerificationTool:
                 if pattern in domain_lower and not domain_lower.endswith(f'{pattern}.com'):
                     checks['suspicious_domain'] = f"Contains '{pattern}' but not official domain"
             
-            # Check domain age (simplified)
+            # Check domain age via RDAP
             try:
-                w = get_whois_info(domain)
-                creation_date = getattr(w, 'creation_date', None)
-                if isinstance(creation_date, list):
-                    creation_date = creation_date[0]
+                rdap = fetch_rdap(domain)
+                creation_date = None
+                if rdap:
+                    for event in rdap.get('events', []):
+                        if event.get('eventAction') == 'registration':
+                            date_str = event.get('eventDate')
+                            if date_str:
+                                creation_date = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                            break
                 if creation_date:
-                    age_days = (datetime.now() - creation_date).days
+                    age_days = (datetime.now(timezone.utc) - creation_date).days
                     checks['domain_age_days'] = age_days
                     if age_days < 30:
                         checks['new_domain_warning'] = "Domain is less than 30 days old"
@@ -3088,14 +3102,12 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
 
 def install_requirements():
     """Install required packages"""
-    required_packages = ['requests', 'python-whois', 'dnspython']  # Added dnspython for MX checks
+    required_packages = ['requests', 'dnspython']  # Added dnspython for MX checks
 
     for package in required_packages:
         try:
             if package == 'dnspython':
                 __import__('dns.resolver')  # Check for DNS library
-            elif package == 'python-whois':
-                __import__('whois')  # Module name differs from package
             else:
                 __import__(package.replace('-', '_'))
         except ImportError:
