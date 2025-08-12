@@ -28,6 +28,13 @@ import dns.exception  # NEW: For DNS exceptions
 from urllib3.exceptions import InsecureRequestWarning
 warnings.filterwarnings('ignore', category=InsecureRequestWarning)
 
+# Optional date picker for comments dialog
+try:
+    from tkcalendar import DateEntry
+    HAS_TKCALENDAR = True
+except Exception:
+    HAS_TKCALENDAR = False
+
 
 def get_whois_info(domain):
     """Retrieve WHOIS information using whichever whois library is available."""
@@ -121,6 +128,18 @@ class WebsiteVerificationTool:
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT
+            )
+        ''')
+
+        # Comments table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS comments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                website_id INTEGER,
+                comment_date TEXT,
+                name TEXT,
+                comment TEXT,
+                FOREIGN KEY (website_id) REFERENCES websites (id)
             )
         ''')
         
@@ -388,11 +407,14 @@ class WebsiteVerificationTool:
         ttk.Button(search_frame, text="Search", command=self.filter_websites).pack(side=tk.LEFT, padx=5)
         ttk.Button(search_frame, text="Clear", command=self.clear_search).pack(side=tk.LEFT)
 
-        # Treeview for websites with comprehensive columns - UPDATED to include MX Records
-        columns = ('ID', 'Name', 'URL', 'Last Checked', 'Status Code', 'SSL', 'Registrar', 'Domain Age', 'MX Records', 'Changes', 'Risk Score', 'Issues')
+        # Treeview for websites with comprehensive columns - UPDATED to include MX Records and Comments
+        columns = (
+            'ID', 'Name', 'URL', 'Last Checked', 'Status Code', 'SSL', 'Registrar',
+            'Domain Age', 'MX Records', 'Changes', 'Risk Score', 'Issues', 'Comments'
+        )
         self.websites_tree = ttk.Treeview(list_frame, columns=columns, show='headings', selectmode='extended')
-        
-        # Configure column widths and headings - UPDATED to include MX Records
+
+        # Configure column widths and headings - UPDATED to include MX Records and Comments
         column_configs = {
             'ID': 40,
             'Name': 140,  # Slightly reduced
@@ -405,7 +427,8 @@ class WebsiteVerificationTool:
             'MX Records': 85,     # NEW COLUMN
             'Changes': 65,        # Slightly reduced
             'Risk Score': 75,     # Slightly reduced
-            'Issues': 150         # Reduced to fit
+            'Issues': 150,        # Reduced to fit
+            'Comments': 80        # NEW COLUMN
         }
         
         for col in columns:
@@ -428,8 +451,9 @@ class WebsiteVerificationTool:
         list_frame.grid_rowconfigure(1, weight=1)
         list_frame.grid_columnconfigure(0, weight=1)
 
-        # Bind double-click to view details
+        # Bind double-click to view details and single click for comments
         self.websites_tree.bind('<Double-1>', self.view_website_details)
+        self.websites_tree.bind('<Button-1>', self.on_websites_tree_click)
 
     def sort_websites_tree(self, column, reverse):
         """Sort the websites treeview by a given column."""
@@ -477,6 +501,22 @@ class WebsiteVerificationTool:
 
         self.last_sort_column = column
         self.last_sort_reverse = reverse
+
+    def on_websites_tree_click(self, event):
+        """Handle clicks on the websites treeview, opening comments when appropriate."""
+        region = self.websites_tree.identify_region(event.x, event.y)
+        if region != 'cell':
+            return
+        column = self.websites_tree.identify_column(event.x)
+        row_id = self.websites_tree.identify_row(event.y)
+        if not row_id:
+            return
+        col_index = int(column[1:]) - 1
+        col_name = self.websites_tree["columns"][col_index]
+        if col_name == 'Comments':
+            website_id = self.websites_tree.item(row_id)['values'][0]
+            self.show_comments_dialog(website_id)
+            return 'break'
 
     def sort_results_tree(self, column, reverse):
         """Sort the scan results treeview by a given column."""
@@ -891,14 +931,15 @@ class WebsiteVerificationTool:
             else:
                 tag = 'low_risk'
             
-            # Insert the row - UPDATED to include MX records
+            # Insert the row - UPDATED to include MX records and Comments action
             self.websites_tree.insert('', tk.END, values=(
-                website_id, name, url, 
+                website_id, name, url,
                 last_checked[:16] if last_checked else 'Never',
                 status_display, ssl_display, registrar_display,
                 domain_age_display,  # Domain Age column
                 mx_display,  # NEW: MX Records column
-                changes_display, risk_display, issues_display
+                changes_display, risk_display, issues_display,
+                'Comments'
             ), tags=(tag,))
         
         conn.close()
@@ -2191,7 +2232,177 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
             scan_text.insert(tk.END, scan_info)
         
         scan_text.config(state='disabled')
-    
+
+    def show_comments_dialog(self, website_id):
+        """Display dialog for viewing and managing comments for a website."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM websites WHERE id = ?", (website_id,))
+        row = cursor.fetchone()
+        conn.close()
+        website_name = row[0] if row else ''
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title(f"Comments for {website_name}")
+        dialog.geometry("600x400")
+        dialog.transient(self.root)
+
+        form = ttk.Frame(dialog, padding=10)
+        form.pack(fill=tk.X)
+
+        ttk.Label(form, text="Date:").grid(row=0, column=0, sticky='w')
+        if HAS_TKCALENDAR:
+            date_entry = DateEntry(form, width=12)
+            date_entry.set_date(datetime.now())
+        else:
+            date_entry = ttk.Entry(form, width=15)
+            date_entry.insert(0, datetime.now().strftime("%Y-%m-%d"))
+        date_entry.grid(row=0, column=1, padx=5, pady=5, sticky='w')
+
+        ttk.Label(form, text="Name:").grid(row=0, column=2, sticky='w', padx=(20, 0))
+        name_entry = ttk.Entry(form, width=20)
+        name_entry.grid(row=0, column=3, padx=5, pady=5, sticky='w')
+
+        ttk.Label(form, text="Comment:").grid(row=1, column=0, sticky='nw')
+        comment_text = scrolledtext.ScrolledText(form, width=50, height=4)
+        comment_text.grid(row=1, column=1, columnspan=3, padx=5, pady=5, sticky='w')
+
+        def load_comments():
+            for item in comments_tree.get_children():
+                comments_tree.delete(item)
+            conn = sqlite3.connect(self.db_path)
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT id, comment_date, name, comment FROM comments WHERE website_id = ? ORDER BY comment_date DESC",
+                (website_id,)
+            )
+            for cid, cdate, cname, ctext in cur.fetchall():
+                comments_tree.insert('', tk.END, iid=str(cid), values=(cdate, cname, ctext, 'Edit', 'Delete'))
+            conn.close()
+
+        def add_comment():
+            date_val = date_entry.get()
+            name_val = name_entry.get().strip()
+            comment_val = comment_text.get("1.0", tk.END).strip()
+            if not name_val or not comment_val:
+                messagebox.showerror("Error", "Name and Comment are required")
+                return
+            conn = sqlite3.connect(self.db_path)
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO comments (website_id, comment_date, name, comment) VALUES (?, ?, ?, ?)",
+                (website_id, date_val, name_val, comment_val)
+            )
+            conn.commit()
+            conn.close()
+            comment_text.delete("1.0", tk.END)
+            load_comments()
+
+        ttk.Button(form, text="Add", command=add_comment).grid(row=2, column=0, columnspan=4, pady=5)
+
+        list_frame = ttk.Frame(dialog, padding=10)
+        list_frame.pack(fill=tk.BOTH, expand=True)
+
+        columns = ('Date', 'Name', 'Comment', 'Edit', 'Delete')
+        comments_tree = ttk.Treeview(list_frame, columns=columns, show='headings')
+        for col in columns:
+            comments_tree.heading(col, text=col)
+        comments_tree.column('Date', width=90)
+        comments_tree.column('Name', width=100)
+        comments_tree.column('Comment', width=250)
+        comments_tree.column('Edit', width=50, anchor='center')
+        comments_tree.column('Delete', width=60, anchor='center')
+        comments_tree.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
+
+        scrollbar = ttk.Scrollbar(list_frame, orient='vertical', command=comments_tree.yview)
+        comments_tree.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        def on_tree_click(event):
+            region = comments_tree.identify_region(event.x, event.y)
+            if region != 'cell':
+                return
+            column = comments_tree.identify_column(event.x)
+            row_id = comments_tree.identify_row(event.y)
+            if not row_id:
+                return
+            col_name = comments_tree["columns"][int(column[1:]) - 1]
+            comment_id = int(row_id)
+            if col_name == 'Edit':
+                edit_comment(comment_id)
+            elif col_name == 'Delete':
+                delete_comment(comment_id)
+
+        comments_tree.bind('<Button-1>', on_tree_click)
+
+        def edit_comment(comment_id):
+            conn = sqlite3.connect(self.db_path)
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT comment_date, name, comment FROM comments WHERE id = ?",
+                (comment_id,)
+            )
+            row = cur.fetchone()
+            conn.close()
+            if not row:
+                return
+            edit_win = tk.Toplevel(dialog)
+            edit_win.title("Edit Comment")
+
+            ttk.Label(edit_win, text="Date:").grid(row=0, column=0, sticky='w')
+            if HAS_TKCALENDAR:
+                e_date = DateEntry(edit_win, width=12)
+                try:
+                    e_date.set_date(datetime.strptime(row[0], "%Y-%m-%d"))
+                except Exception:
+                    e_date.set_date(datetime.now())
+            else:
+                e_date = ttk.Entry(edit_win, width=15)
+                e_date.insert(0, row[0] or '')
+            e_date.grid(row=0, column=1, padx=5, pady=5, sticky='w')
+
+            ttk.Label(edit_win, text="Name:").grid(row=0, column=2, sticky='w', padx=(20, 0))
+            e_name = ttk.Entry(edit_win, width=20)
+            e_name.insert(0, row[1] or '')
+            e_name.grid(row=0, column=3, padx=5, pady=5, sticky='w')
+
+            ttk.Label(edit_win, text="Comment:").grid(row=1, column=0, sticky='nw')
+            e_comment = scrolledtext.ScrolledText(edit_win, width=50, height=4)
+            e_comment.insert("1.0", row[2] or '')
+            e_comment.grid(row=1, column=1, columnspan=3, padx=5, pady=5, sticky='w')
+
+            def save_edit():
+                date_val = e_date.get()
+                name_val = e_name.get().strip()
+                comment_val = e_comment.get("1.0", tk.END).strip()
+                if not name_val or not comment_val:
+                    messagebox.showerror("Error", "Name and Comment are required")
+                    return
+                conn = sqlite3.connect(self.db_path)
+                cur = conn.cursor()
+                cur.execute(
+                    "UPDATE comments SET comment_date = ?, name = ?, comment = ? WHERE id = ?",
+                    (date_val, name_val, comment_val, comment_id)
+                )
+                conn.commit()
+                conn.close()
+                edit_win.destroy()
+                load_comments()
+
+            ttk.Button(edit_win, text="Save", command=save_edit).grid(row=2, column=0, columnspan=4, pady=5)
+
+        def delete_comment(comment_id):
+            if not messagebox.askyesno("Delete", "Delete this comment?"):
+                return
+            conn = sqlite3.connect(self.db_path)
+            cur = conn.cursor()
+            cur.execute("DELETE FROM comments WHERE id = ?", (comment_id,))
+            conn.commit()
+            conn.close()
+            load_comments()
+
+        load_comments()
+
     def save_settings(self):
         """Save all settings to database"""
 
