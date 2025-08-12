@@ -1944,14 +1944,23 @@ class WebsiteVerificationTool:
         # NEW: MX record issues
         mx_check_status = scan_result.get('mx_check_status', 'not_checked')
         mx_record_count = scan_result.get('mx_record_count', 0)
-        
+
         if mx_check_status == 'error':
             score += 10  # MX check failed
         elif mx_check_status == 'success' and mx_record_count == 0:
             score += 5   # No mail servers (less critical but still noteworthy)
-        
+
+        # Even when MX records exist, they can present email-based threat vectors
+        if mx_check_status == 'success' and mx_record_count > 0:
+            score += 5
+
         # Additional checks
         additional = scan_result.get('additional_checks', {})
+
+        # Penalize relatively new domains
+        domain_age_days = additional.get('domain_age_days')
+        if domain_age_days is not None and domain_age_days < 365:
+            score += 10
         
         if 'suspicious_domain' in additional:
             score += 40
