@@ -457,9 +457,11 @@ class WebsiteVerificationTool:
         list_frame.grid_rowconfigure(1, weight=1)
         list_frame.grid_columnconfigure(0, weight=1)
 
+
         # Bind double-click to view details and reposition buttons on resize
         self.websites_tree.bind('<Double-1>', self.view_website_details)
         self.websites_tree.bind('<Configure>', self.position_comment_buttons)
+
 
     def sort_websites_tree(self, column, reverse):
         """Sort the websites treeview by a given column."""
@@ -508,6 +510,7 @@ class WebsiteVerificationTool:
         self.last_sort_column = column
         self.last_sort_reverse = reverse
 
+
     def on_tree_yscroll(self, *args):
         """Vertical scrollbar callback that also repositions comment buttons."""
         self.websites_tree.yview(*args)
@@ -528,6 +531,7 @@ class WebsiteVerificationTool:
                 continue
             x, y, width, height = bbox
             btn.place(x=x, y=y, width=width, height=height)
+
 
     def sort_results_tree(self, column, reverse):
         """Sort the scan results treeview by a given column."""
@@ -947,15 +951,17 @@ class WebsiteVerificationTool:
             else:
                 tag = 'low_risk'
             
+
             # Insert the row - UPDATED to include MX records and button placeholder
             item_id = self.websites_tree.insert('', tk.END, values=(
+
                 website_id, name, url,
                 last_checked[:16] if last_checked else 'Never',
                 status_display, ssl_display, registrar_display,
                 domain_age_display,  # Domain Age column
                 mx_display,  # NEW: MX Records column
                 changes_display, risk_display, issues_display,
-                ''
+
             ), tags=(tag,))
 
             # Overlay a button for comments on this row
@@ -2279,7 +2285,9 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
 
         ttk.Label(form, text="Date:").grid(row=0, column=0, sticky='w')
         if HAS_TKCALENDAR:
+
             date_entry = DateEntry(form, width=12, state='readonly')
+
             date_entry.set_date(datetime.now())
         else:
             date_entry = ttk.Entry(form, width=15)
@@ -2378,7 +2386,9 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
 
             ttk.Label(edit_win, text="Date:").grid(row=0, column=0, sticky='w')
             if HAS_TKCALENDAR:
+
                 e_date = DateEntry(edit_win, width=12, state='readonly')
+
                 try:
                     e_date.set_date(datetime.strptime(row[0], "%Y-%m-%d"))
                 except Exception:
