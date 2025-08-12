@@ -426,22 +426,16 @@ class WebsiteVerificationTool:
 
         def sort_key(item):
             value = item[0]
-            if column in ("Last Checked", "Added", "Date"):
-                try:
-                    dt = datetime.fromisoformat(value)
-                except (ValueError, TypeError):
-                    dt = datetime.min
-                return (0, dt)
             try:
-                return (1, float(value))
+                return float(value)
             except (ValueError, TypeError):
                 match = re.search(r'-?\d+(?:\.\d+)?', str(value))
                 if match:
                     try:
-                        return (1, float(match.group()))
+                        return float(match.group())
                     except ValueError:
                         pass
-                return (2, str(value).lower())
+                return str(value).lower()
 
         data.sort(key=sort_key, reverse=reverse)
 
@@ -473,26 +467,16 @@ class WebsiteVerificationTool:
 
         def sort_key(item):
             value = item[0]
-
-            if column in ("Date", "Last Checked", "Added"):
-                try:
-                    dt = datetime.fromisoformat(value)
-                except (ValueError, TypeError):
-                    dt = datetime.min
-                return (0, dt)
             try:
-                return (1, float(value))
-
+                return float(value)
             except (ValueError, TypeError):
                 match = re.search(r'-?\d+(?:\.\d+)?', str(value))
                 if match:
                     try:
-
-                        return (1, float(match.group()))
+                        return float(match.group())
                     except ValueError:
                         pass
-                return (2, str(value).lower())
-
+                return str(value).lower()
 
         data.sort(key=sort_key, reverse=reverse)
 
