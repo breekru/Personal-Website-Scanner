@@ -50,6 +50,10 @@ class WebsiteVerificationTool:
         self.last_sort_column = None
         self.last_sort_reverse = False
 
+        # Sorting state for scan results treeview
+        self.results_last_sort_column = None
+        self.results_last_sort_reverse = False
+
         # Scan state
         self.is_scanning = False
         self.scan_cancelled = False
@@ -455,6 +459,47 @@ class WebsiteVerificationTool:
         self.last_sort_column = column
         self.last_sort_reverse = reverse
 
+    def sort_results_tree(self, column, reverse):
+        """Sort the scan results treeview by a given column."""
+        data = [(self.results_tree.set(k, column), k) for k in self.results_tree.get_children('')]
+
+        def sort_key(item):
+            value = item[0]
+            try:
+                return float(value)
+            except (ValueError, TypeError):
+                match = re.search(r'-?\d+(?:\.\d+)?', str(value))
+                if match:
+                    try:
+                        return float(match.group())
+                    except ValueError:
+                        pass
+                return str(value).lower()
+
+        data.sort(key=sort_key, reverse=reverse)
+
+        for index, (_, k) in enumerate(data):
+            self.results_tree.move(k, '', index)
+
+        for col in self.results_tree["columns"]:
+            heading_text = col
+            if col == column:
+                heading_text += ' ▼' if reverse else ' ▲'
+                self.results_tree.heading(
+                    col,
+                    text=heading_text,
+                    command=lambda _col=col, _rev=not reverse: self.sort_results_tree(_col, _rev)
+                )
+            else:
+                self.results_tree.heading(
+                    col,
+                    text=heading_text,
+                    command=lambda _col=col: self.sort_results_tree(_col, False)
+                )
+
+        self.results_last_sort_column = column
+        self.results_last_sort_reverse = reverse
+
     def setup_results_tab(self):
         # Filter frame
         filter_frame = ttk.LabelFrame(self.results_frame, text="Filters", padding=10)
@@ -480,7 +525,11 @@ class WebsiteVerificationTool:
         self.results_tree = ttk.Treeview(results_list_frame, columns=columns, show='headings')
         
         for col in columns:
-            self.results_tree.heading(col, text=col)
+            self.results_tree.heading(
+                col,
+                text=col,
+                command=lambda _col=col: self.sort_results_tree(_col, False)
+            )
             self.results_tree.column(col, width=120)
         
         # Scrollbar for results
@@ -2020,6 +2069,10 @@ class WebsiteVerificationTool:
                 result[7]  # Risk score
             )
             self.results_tree.insert('', tk.END, values=formatted_result)
+
+        # Reapply previous sorting if available
+        if self.results_last_sort_column:
+            self.sort_results_tree(self.results_last_sort_column, self.results_last_sort_reverse)
     
     def apply_results_filter(self):
         """Apply filters to scan results"""
