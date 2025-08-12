@@ -389,13 +389,9 @@ class WebsiteVerificationTool:
         # Progress bar, status label, and cancel button for scanning (hidden initially)
         self.progress_frame = ttk.Frame(self.websites_frame)
         self.scan_progress = ttk.Progressbar(self.progress_frame, mode='determinate')
-        self.scan_progress.pack(fill=tk.X, padx=10, pady=(5, 2))
-        progress_bottom = ttk.Frame(self.progress_frame)
-        progress_bottom.pack(fill=tk.X, padx=10)
-        self.scan_status_label = ttk.Label(progress_bottom, text="")
-        self.scan_status_label.pack(side=tk.LEFT)
-        self.cancel_scan_button = ttk.Button(progress_bottom, text="Cancel", command=self.cancel_scan, state=tk.DISABLED)
-        self.cancel_scan_button.pack(side=tk.RIGHT)
+        self.progress_bottom = ttk.Frame(self.progress_frame)
+        self.scan_status_label = ttk.Label(self.progress_bottom, text="")
+        self.cancel_scan_button = ttk.Button(self.progress_bottom, text="Cancel", command=self.cancel_scan, state=tk.DISABLED)
 
     def sort_websites_tree(self, column, reverse):
         """Sort the websites treeview by a given column."""
@@ -1758,7 +1754,14 @@ class WebsiteVerificationTool:
         self.scan_progress['maximum'] = total
         self.scan_status_label.config(text=f"Scanning 0/{total}...")
         self.cancel_scan_button.config(state=tk.NORMAL)
-        self.progress_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+
+        if not self.scan_progress.winfo_manager():
+            self.scan_progress.pack(fill=tk.X, padx=10, pady=(5, 2))
+            self.progress_bottom.pack(fill=tk.X, padx=10)
+            self.scan_status_label.pack(side=tk.LEFT)
+            self.cancel_scan_button.pack(side=tk.RIGHT)
+
+        self.progress_frame.place(relx=0.5, rely=0.5, anchor='center')
 
     def update_scan_progress(self, current, total):
         """Update progress bar and status label"""
@@ -1770,7 +1773,7 @@ class WebsiteVerificationTool:
         self.scan_progress['value'] = 0
         self.scan_status_label.config(text="")
         self.cancel_scan_button.config(state=tk.DISABLED)
-        self.progress_frame.pack_forget()
+        self.progress_frame.place_forget()
 
     def cancel_scan(self):
         """Signal the active scan to cancel"""
