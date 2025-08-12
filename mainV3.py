@@ -749,6 +749,7 @@ class WebsiteVerificationTool:
         ttk.Button(report_frame, text="Changes Report", command=self.generate_changes_report).pack(side=tk.LEFT, padx=5)
         ttk.Button(report_frame, text="Weekly Summary", command=self.generate_weekly_summary).pack(side=tk.LEFT, padx=5)
         ttk.Button(report_frame, text="Scan Comparison", command=self.generate_scan_comparison_report).pack(side=tk.LEFT, padx=5)
+        ttk.Button(report_frame, text="High Risk Comparison", command=self.generate_high_risk_comparison_report).pack(side=tk.LEFT, padx=5)
         ttk.Button(report_frame, text="Export CSV", command=self.export_scan_comparison_csv).pack(side=tk.LEFT, padx=5)
         
         # Report display
@@ -2779,7 +2780,7 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
-        cursor.execute("SELECT id, name, url FROM websites")
+        cursor.execute("SELECT id, url FROM websites")
         websites = cursor.fetchall()
 
         sections = {
@@ -2790,7 +2791,7 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
         }
         skipped = []
 
-        for site_id, name, url in websites:
+        for site_id, url in websites:
             cursor.execute(
                 """
                 SELECT scan_date, status_code, ssl_valid, ssl_issuer, ssl_expiry,
@@ -2804,7 +2805,7 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
             )
             rows = cursor.fetchall()
             if len(rows) < 2:
-                skipped.append(f"{name} ({url})")
+                skipped.append(url)
                 continue
 
             curr, prev = rows[0], rows[1]
@@ -2812,11 +2813,10 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
 
             if curr[1] != prev[1]:
                 sections["Status Code Changes"].append(
-                    f"{name} ({url}): {prev[1]} -> {curr[1]}"
+                    f"{url}: {prev[1]} -> {curr[1]}"
                 )
                 self.last_scan_diff_rows.append({
                     "Category": "Status Code",
-                    "Website": name,
                     "URL": url,
                     "Previous": prev[1],
                     "Current": curr[1],
@@ -2828,11 +2828,10 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
             curr_ssl = f"valid={curr[2]} issuer={curr[3]} expiry={curr[4]}"
             if prev_ssl != curr_ssl:
                 sections["SSL Changes"].append(
-                    f"{name} ({url}): {prev_ssl} -> {curr_ssl}"
+                    f"{url}: {prev_ssl} -> {curr_ssl}"
                 )
                 self.last_scan_diff_rows.append({
                     "Category": "SSL",
-                    "Website": name,
                     "URL": url,
                     "Previous": prev_ssl,
                     "Current": curr_ssl,
@@ -2844,11 +2843,10 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
             curr_mx = f"{curr[5]} records: {curr[6]}"
             if prev_mx != curr_mx:
                 sections["MX Record Changes"].append(
-                    f"{name} ({url}): {prev_mx} -> {curr_mx}"
+                    f"{url}: {prev_mx} -> {curr_mx}"
                 )
                 self.last_scan_diff_rows.append({
                     "Category": "MX Records",
-                    "Website": name,
                     "URL": url,
                     "Previous": prev_mx,
                     "Current": curr_mx,
@@ -2858,11 +2856,10 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
 
             if curr[7] != prev[7]:
                 sections["Registrar Changes"].append(
-                    f"{name} ({url}): {prev[7]} -> {curr[7]}"
+                    f"{url}: {prev[7]} -> {curr[7]}"
                 )
                 self.last_scan_diff_rows.append({
                     "Category": "Registrar",
-                    "Website": name,
                     "URL": url,
                     "Previous": prev[7],
                     "Current": curr[7],
@@ -2873,6 +2870,132 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
         conn.close()
 
         report = "SCAN COMPARISON REPORT\n"
+        report += f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        report += "="*60 + "\n\n"
+
+        order = [
+            ("MX Record Changes", "⚠️ MX RECORD CHANGES"),
+            ("Status Code Changes", "STATUS CODE CHANGES"),
+            ("SSL Changes", "SSL CHANGES"),
+            ("Registrar Changes", "REGISTRAR CHANGES"),
+        ]
+
+        for key, header in order:
+            lines = sections[key]
+            if lines:
+                report += header + "\n" + "-"*40 + "\n"
+                for line in lines:
+                    report += line + "\n"
+                report += "\n"
+
+        if skipped:
+            report += "SKIPPED (insufficient scans):\n" + "-"*40 + "\n"
+            for line in skipped:
+                report += f"{line}\n"
+
+        self.report_text.delete(1.0, tk.END)
+        self.report_text.insert(1.0, report)
+
+    def generate_high_risk_comparison_report(self):
+        """Compare scans for high-risk websites"""
+        self.last_scan_diff_rows = []
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT id, url, manual_status FROM websites")
+        websites = cursor.fetchall()
+
+        sections = {
+            "MX Record Changes": [],
+            "Status Code Changes": [],
+            "SSL Changes": [],
+            "Registrar Changes": []
+        }
+        skipped = []
+
+        for site_id, url, manual_status in websites:
+            cursor.execute(
+                """
+                SELECT scan_date, status_code, ssl_valid, ssl_issuer, ssl_expiry,
+                       mx_record_count, mx_records, registrar, risk_score
+                FROM scan_results
+                WHERE website_id = ?
+                ORDER BY scan_date DESC
+                LIMIT 2
+                """,
+                (site_id,),
+            )
+            rows = cursor.fetchall()
+            if len(rows) < 2:
+                skipped.append(url)
+                continue
+
+            curr, prev = rows[0], rows[1]
+            curr_date, prev_date = curr[0], prev[0]
+            curr_risk = curr[8]
+
+            if not (manual_status == 'high_risk' or (not manual_status and curr_risk is not None and curr_risk >= 50)):
+                continue
+
+            if curr[1] != prev[1]:
+                sections["Status Code Changes"].append(
+                    f"{url}: {prev[1]} -> {curr[1]}"
+                )
+                self.last_scan_diff_rows.append({
+                    "Category": "Status Code",
+                    "URL": url,
+                    "Previous": prev[1],
+                    "Current": curr[1],
+                    "Prev Scan": prev_date,
+                    "Current Scan": curr_date,
+                })
+
+            prev_ssl = f"valid={prev[2]} issuer={prev[3]} expiry={prev[4]}"
+            curr_ssl = f"valid={curr[2]} issuer={curr[3]} expiry={curr[4]}"
+            if prev_ssl != curr_ssl:
+                sections["SSL Changes"].append(
+                    f"{url}: {prev_ssl} -> {curr_ssl}"
+                )
+                self.last_scan_diff_rows.append({
+                    "Category": "SSL",
+                    "URL": url,
+                    "Previous": prev_ssl,
+                    "Current": curr_ssl,
+                    "Prev Scan": prev_date,
+                    "Current Scan": curr_date,
+                })
+
+            prev_mx = f"{prev[5]} records: {prev[6]}"
+            curr_mx = f"{curr[5]} records: {curr[6]}"
+            if prev_mx != curr_mx:
+                sections["MX Record Changes"].append(
+                    f"{url}: {prev_mx} -> {curr_mx}"
+                )
+                self.last_scan_diff_rows.append({
+                    "Category": "MX Records",
+                    "URL": url,
+                    "Previous": prev_mx,
+                    "Current": curr_mx,
+                    "Prev Scan": prev_date,
+                    "Current Scan": curr_date,
+                })
+
+            if curr[7] != prev[7]:
+                sections["Registrar Changes"].append(
+                    f"{url}: {prev[7]} -> {curr[7]}"
+                )
+                self.last_scan_diff_rows.append({
+                    "Category": "Registrar",
+                    "URL": url,
+                    "Previous": prev[7],
+                    "Current": curr[7],
+                    "Prev Scan": prev_date,
+                    "Current Scan": curr_date,
+                })
+
+        conn.close()
+
+        report = "HIGH RISK SCAN COMPARISON REPORT\n"
         report += f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
         report += "="*60 + "\n\n"
 
@@ -2918,7 +3041,6 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
                     f,
                     fieldnames=[
                         "Category",
-                        "Website",
                         "URL",
                         "Previous",
                         "Current",
