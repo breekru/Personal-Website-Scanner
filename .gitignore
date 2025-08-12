@@ -198,3 +198,4 @@ cython_debug/
 *.db
 wearelegalshield_com.txt
 sample_list.csv
+config.json
