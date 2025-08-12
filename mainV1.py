@@ -492,7 +492,8 @@ class WebsiteVerificationTool:
         conn.close()
         
         # Configure tags for color coding
-        self.websites_tree.tag_configure('high_risk', background='#ffebee')  # Light red
+        # Use deep red with white text for high-risk entries
+        self.websites_tree.tag_configure('high_risk', background='#b71c1c', foreground='white')
         self.websites_tree.tag_configure('medium_risk', background='#fff3e0')  # Light orange
         self.websites_tree.tag_configure('low_risk', background='#e8f5e8')  # Light green
         self.websites_tree.tag_configure('not_scanned', background='#f5f5f5')  # Light gray
