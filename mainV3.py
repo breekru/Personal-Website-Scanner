@@ -50,6 +50,10 @@ class WebsiteVerificationTool:
         self.root.title("Website Legitimacy Verification Tool")
         self.root.state('zoomed')
 
+        # Track buttons placed in the websites tree early to avoid attribute errors
+        # if other initialization steps fail or trigger callbacks before completion.
+        self.comment_buttons = {}
+
         # Style initialization for modern look
         self.style = ttk.Style()
         self.style.theme_use('clam')
