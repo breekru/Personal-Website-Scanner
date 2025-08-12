@@ -14,6 +14,7 @@ import threading
 import concurrent.futures
 import os
 import json
+import csv
 import shutil
 import re
 from urllib.parse import urlparse
@@ -2313,7 +2314,124 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
                 
         except Exception as e:
             messagebox.showerror("Error", f"GitHub pull failed: {str(e)}")
-    
+
+    def generate_scan_summary_csv(self):
+        """Generate CSV summarizing changes between the two latest scans.
+
+        For each website with at least two scan entries, compare the most
+        recent scan with the previous one to detect changes in status code,
+        MX record status/count, and SSL validity/expiry. The findings are
+        written to a CSV file grouped by change type. Returns the path to the
+        generated CSV file.
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            SELECT w.id, COALESCE(w.name, w.url)
+            FROM websites w
+            JOIN (
+                SELECT website_id
+                FROM scan_results
+                GROUP BY website_id
+                HAVING COUNT(*) >= 2
+            ) sr ON w.id = sr.website_id
+            """
+        )
+        websites = cursor.fetchall()
+
+        status_changes = []
+        mx_changes = []
+        ssl_changes = []
+
+        for site_id, site_name in websites:
+            cursor.execute(
+                """
+                SELECT status_code, mx_check_status, mx_record_count,
+                       ssl_valid, ssl_expiry
+                FROM scan_results
+                WHERE website_id = ?
+                ORDER BY datetime(scan_date) DESC
+                LIMIT 2
+                """,
+                (site_id,),
+            )
+            rows = cursor.fetchall()
+            if len(rows) < 2:
+                continue
+            latest, previous = rows[0], rows[1]
+
+            status_code_cur, mx_status_cur, mx_count_cur, ssl_valid_cur, ssl_expiry_cur = latest
+            status_code_prev, mx_status_prev, mx_count_prev, ssl_valid_prev, ssl_expiry_prev = previous
+
+            if status_code_cur != status_code_prev:
+                status_changes.append([site_name, status_code_prev, status_code_cur])
+
+            if (mx_status_cur != mx_status_prev) or (mx_count_cur != mx_count_prev):
+                mx_changes.append(
+                    [
+                        site_name,
+                        mx_status_prev,
+                        mx_status_cur,
+                        mx_count_prev,
+                        mx_count_cur,
+                    ]
+                )
+
+            if (ssl_valid_cur != ssl_valid_prev) or (ssl_expiry_cur != ssl_expiry_prev):
+                ssl_changes.append(
+                    [
+                        site_name,
+                        "Yes" if ssl_valid_prev else "No",
+                        "Yes" if ssl_valid_cur else "No",
+                        ssl_expiry_prev,
+                        ssl_expiry_cur,
+                    ]
+                )
+
+        conn.close()
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        file_path = os.path.join(os.getcwd(), f"scan_summary_{timestamp}.csv")
+
+        with open(file_path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["Status Changes"])
+            writer.writerow(["Website", "Previous Status Code", "Current Status Code"])
+            for row in status_changes:
+                writer.writerow(row)
+            writer.writerow([])
+
+            writer.writerow(["MX Record Changes"])
+            writer.writerow(
+                [
+                    "Website",
+                    "Previous MX Status",
+                    "Current MX Status",
+                    "Previous MX Count",
+                    "Current MX Count",
+                ]
+            )
+            for row in mx_changes:
+                writer.writerow(row)
+            writer.writerow([])
+
+            writer.writerow(["SSL Status Changes"])
+            writer.writerow(
+                [
+                    "Website",
+                    "Previous SSL Valid",
+                    "Current SSL Valid",
+                    "Previous Expiry",
+                    "Current Expiry",
+                ]
+            )
+            for row in ssl_changes:
+                writer.writerow(row)
+
+        return file_path
+
     def generate_risk_report(self):
         """Generate risk assessment report including MX record analysis"""
         conn = sqlite3.connect(self.db_path)
