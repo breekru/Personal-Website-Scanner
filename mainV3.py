@@ -101,6 +101,7 @@ class WebsiteVerificationTool:
                 added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_checked TIMESTAMP,
                 status TEXT DEFAULT 'pending',
+                manual_status TEXT,
                 notes TEXT
             )
         ''')
@@ -167,29 +168,36 @@ class WebsiteVerificationTool:
             json.dump({'db_path': self.db_path}, f, indent=4)
     
     def update_database_schema(self):
-        """Update database schema to include MX record fields"""
+        """Update database schema to include MX and manual status fields"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
+
+        # Add manual_status column to websites table if it doesn't exist
+        try:
+            cursor.execute("ALTER TABLE websites ADD COLUMN manual_status TEXT")
+            print("Added manual_status column to websites")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
         # Add new MX columns to existing scan_results table if they don't exist
         try:
             cursor.execute("ALTER TABLE scan_results ADD COLUMN mx_record_count INTEGER DEFAULT 0")
             print("Added mx_record_count column")
         except sqlite3.OperationalError:
             pass  # Column already exists
-        
+
         try:
             cursor.execute("ALTER TABLE scan_results ADD COLUMN mx_records TEXT")
             print("Added mx_records column")
         except sqlite3.OperationalError:
             pass  # Column already exists
-            
+
         try:
             cursor.execute("ALTER TABLE scan_results ADD COLUMN mx_check_status TEXT DEFAULT 'not_checked'")
             print("Added mx_check_status column")
         except sqlite3.OperationalError:
             pass  # Column already exists
-        
+
         conn.commit()
         conn.close()
     
@@ -330,6 +338,8 @@ class WebsiteVerificationTool:
         tools_menu.add_command(label="Scan All", command=self.scan_all_websites)
         tools_menu.add_command(label="Scan Selected", command=self.scan_selected)
         tools_menu.add_command(label="Delete Selected", command=self.delete_selected)
+        tools_menu.add_command(label="Mark Safe", command=self.mark_selected_safe)
+        tools_menu.add_command(label="Mark High Risk", command=self.mark_selected_high_risk)
         menu_bar.add_cascade(label="Tools", menu=tools_menu)
 
         # Help menu
@@ -388,6 +398,8 @@ class WebsiteVerificationTool:
         ttk.Button(bulk_frame, text="Scan All", command=self.scan_all_websites).pack(side=tk.LEFT, padx=5)
         ttk.Button(bulk_frame, text="Scan Selected", command=self.scan_selected).pack(side=tk.LEFT, padx=5)
         ttk.Button(bulk_frame, text="Delete Selected", command=self.delete_selected).pack(side=tk.LEFT, padx=5)
+        ttk.Button(bulk_frame, text="Mark Safe", command=self.mark_selected_safe).pack(side=tk.LEFT, padx=5)
+        ttk.Button(bulk_frame, text="Mark High Risk", command=self.mark_selected_high_risk).pack(side=tk.LEFT, padx=5)
 
         # Progress bar, status label, and cancel button for scanning (hidden initially)
         self.progress_frame = ttk.Frame(bulk_frame)
@@ -787,17 +799,17 @@ class WebsiteVerificationTool:
         # First get all websites with optional search filter
         if search_term:
             cursor.execute(
-                'SELECT id, name, url, last_checked FROM websites '
+                'SELECT id, name, url, last_checked, manual_status FROM websites '
                 'WHERE name LIKE ? OR url LIKE ? ORDER BY name',
                 (f"%{search_term}%", f"%{search_term}%")
             )
         else:
-            cursor.execute('SELECT id, name, url, last_checked FROM websites ORDER BY name')
+            cursor.execute('SELECT id, name, url, last_checked, manual_status FROM websites ORDER BY name')
         websites = cursor.fetchall()
-        
+
         # Then get latest scan data for each website individually
         for website in websites:
-            website_id, name, url, last_checked = website
+            website_id, name, url, last_checked, manual_status = website
             
             # Get the most recent scan result for this specific website - UPDATED to include MX data
             cursor.execute('''
@@ -939,8 +951,12 @@ class WebsiteVerificationTool:
             else:
                 issues_display = 'Not Scanned'
             
-            # Determine tag for color coding (enhanced with domain age and MX issues)
-            if status_code == 0 or status_code is None:
+            # Determine tag for color coding with manual overrides
+            if manual_status == 'safe':
+                tag = 'safe_manual'
+            elif manual_status == 'high_risk':
+                tag = 'high_risk_manual'
+            elif status_code == 0 or status_code is None:
                 tag = 'not_scanned'
             elif risk_score and risk_score >= 50:
                 tag = 'high_risk'
@@ -978,7 +994,9 @@ class WebsiteVerificationTool:
         
         conn.close()
         
-        # Configure tags for color coding (enhanced with MX warning tag)
+        # Configure tags for color coding (enhanced with MX warning tag and manual status)
+        self.websites_tree.tag_configure('safe_manual', background='#bbdefb')
+        self.websites_tree.tag_configure('high_risk_manual', background='#b71c1c', foreground='white')
         self.websites_tree.tag_configure('high_risk', background='#ffebee')  # Light red
         self.websites_tree.tag_configure('medium_risk', background='#fff3e0')  # Light orange
         self.websites_tree.tag_configure('low_risk', background='#e8f5e8')  # Light green
@@ -2110,7 +2128,31 @@ class WebsiteVerificationTool:
             conn.commit()
             conn.close()
             self.load_websites()
-    
+
+    def _mark_selected_manual_status(self, status):
+        """Helper to update manual_status for selected websites"""
+        selection = self.websites_tree.selection()
+        if not selection:
+            messagebox.showwarning("Warning", "Please select websites to mark")
+            return
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        for item in selection:
+            website_id = self.websites_tree.item(item)['values'][0]
+            cursor.execute("UPDATE websites SET manual_status = ? WHERE id = ?", (status, website_id))
+        conn.commit()
+        conn.close()
+        self.load_websites()
+
+    def mark_selected_safe(self):
+        """Mark selected websites as manually safe"""
+        self._mark_selected_manual_status('safe')
+
+    def mark_selected_high_risk(self):
+        """Mark selected websites as manually high risk"""
+        self._mark_selected_manual_status('high_risk')
+
     def import_websites(self):
         """Import websites from file"""
         filename = filedialog.askopenfilename(
