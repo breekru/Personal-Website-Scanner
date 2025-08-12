@@ -338,8 +338,6 @@ class WebsiteVerificationTool:
         tools_menu.add_command(label="Scan All", command=self.scan_all_websites)
         tools_menu.add_command(label="Scan Selected", command=self.scan_selected)
         tools_menu.add_command(label="Delete Selected", command=self.delete_selected)
-        tools_menu.add_command(label="Mark Safe", command=self.mark_selected_safe)
-        tools_menu.add_command(label="Mark High Risk", command=self.mark_selected_high_risk)
         menu_bar.add_cascade(label="Tools", menu=tools_menu)
 
         # Help menu
@@ -394,8 +392,6 @@ class WebsiteVerificationTool:
         ttk.Button(bulk_frame, text="Scan All", command=self.scan_all_websites).pack(side=tk.LEFT, padx=5)
         ttk.Button(bulk_frame, text="Scan Selected", command=self.scan_selected).pack(side=tk.LEFT, padx=5)
         ttk.Button(bulk_frame, text="Delete Selected", command=self.delete_selected).pack(side=tk.LEFT, padx=5)
-        ttk.Button(bulk_frame, text="Mark Safe", command=self.mark_selected_safe).pack(side=tk.LEFT, padx=5)
-        ttk.Button(bulk_frame, text="Mark High Risk", command=self.mark_selected_high_risk).pack(side=tk.LEFT, padx=5)
 
         # Progress bar, status label, and cancel button for scanning (hidden initially)
         self.progress_frame = ttk.Frame(bulk_frame)
@@ -2134,29 +2130,38 @@ class WebsiteVerificationTool:
             conn.close()
             self.load_websites()
 
-    def _mark_selected_manual_status(self, status):
-        """Helper to update manual_status for selected websites"""
-        selection = self.websites_tree.selection()
-        if not selection:
-            messagebox.showwarning("Warning", "Please select websites to mark")
-            return
+    def toggle_manual_status(self, website_id, status):
+        """Toggle a manual status flag for a website.
 
+        If the website already has the given status, the flag is cleared.
+        Otherwise the status is set, ensuring only one manual status is
+        active at a time."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        for item in selection:
-            website_id = int(item)
-            cursor.execute("UPDATE websites SET manual_status = ? WHERE id = ?", (status, website_id))
+
+        cursor.execute(
+            "SELECT manual_status FROM websites WHERE id = ?",
+            (website_id,)
+        )
+        row = cursor.fetchone()
+        current_status = row[0] if row else None
+
+        if current_status == status:
+            cursor.execute(
+                "UPDATE websites SET manual_status = NULL WHERE id = ?",
+                (website_id,)
+            )
+            new_status = None
+        else:
+            cursor.execute(
+                "UPDATE websites SET manual_status = ? WHERE id = ?",
+                (status, website_id)
+            )
+            new_status = status
+
         conn.commit()
         conn.close()
-        self.load_websites()
-
-    def mark_selected_safe(self):
-        """Mark selected websites as manually safe"""
-        self._mark_selected_manual_status('safe')
-
-    def mark_selected_high_risk(self):
-        """Mark selected websites as manually high risk"""
-        self._mark_selected_manual_status('high_risk')
+        return new_status
 
     def import_websites(self):
         """Import websites from file"""
@@ -2279,6 +2284,29 @@ class WebsiteVerificationTool:
         ttk.Label(info_frame, text=f"URL: {website[1]}").pack(anchor='w')
         ttk.Label(info_frame, text=f"Added: {website[3]}").pack(anchor='w')
         ttk.Label(info_frame, text=f"Last Checked: {website[4] or 'Never'}").pack(anchor='w')
+
+        manual_status = website[6]
+        safe_var = tk.BooleanVar(value=manual_status == 'safe')
+        high_risk_var = tk.BooleanVar(value=manual_status == 'high_risk')
+
+        def on_safe_toggle():
+            new_status = self.toggle_manual_status(website_id, 'safe')
+            safe_var.set(new_status == 'safe')
+            high_risk_var.set(False)
+            self.load_websites()
+
+        def on_high_risk_toggle():
+            new_status = self.toggle_manual_status(website_id, 'high_risk')
+            high_risk_var.set(new_status == 'high_risk')
+            safe_var.set(False)
+            self.load_websites()
+
+        toggle_frame = ttk.Frame(info_frame)
+        toggle_frame.pack(anchor='w', pady=(5, 0))
+        ttk.Checkbutton(toggle_frame, text="Safe", variable=safe_var,
+                        command=on_safe_toggle).pack(side=tk.LEFT, padx=5)
+        ttk.Checkbutton(toggle_frame, text="High Risk", variable=high_risk_var,
+                        command=on_high_risk_toggle).pack(side=tk.LEFT, padx=5)
         
         # Recent scans
         scans_frame = ttk.LabelFrame(details_window, text="Recent Scans", padding=10)
