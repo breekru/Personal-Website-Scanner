@@ -746,17 +746,57 @@ class WebsiteVerificationTool:
         report_frame = ttk.LabelFrame(self.reports_frame, text="Generate Reports", padding=10)
         report_frame.pack(fill=tk.X, padx=10, pady=10)
 
-        ttk.Button(report_frame, text="Risk Assessment Report", command=self.generate_risk_report).pack(side=tk.LEFT, padx=5)
-        ttk.Button(report_frame, text="Changes Report", command=self.generate_changes_report).pack(side=tk.LEFT, padx=5)
-        ttk.Button(report_frame, text="Weekly Summary", command=self.generate_weekly_summary).pack(side=tk.LEFT, padx=5)
-        ttk.Button(report_frame, text="Scan Comparison", command=self.generate_scan_comparison_report).pack(side=tk.LEFT, padx=5)
-        ttk.Button(report_frame, text="High Risk Comparison", command=self.generate_high_risk_comparison_report).pack(side=tk.LEFT, padx=5)
-        ttk.Button(report_frame, text="Export CSV", command=self.export_scan_comparison_csv).pack(side=tk.LEFT, padx=5)
-        
+        self.report_options = [
+            "Risk Assessment Report",
+            "Changes Report",
+            "Weekly Summary",
+            "Scan Comparison",
+            "High Risk Comparison",
+        ]
+
+        self.selected_report_var = tk.StringVar(value=self.report_options[0])
+        self.report_combobox = ttk.Combobox(
+            report_frame,
+            textvariable=self.selected_report_var,
+            values=self.report_options,
+            state="readonly",
+            width=25,
+        )
+        self.report_combobox.pack(side=tk.LEFT, padx=5)
+
+        ttk.Button(report_frame, text="Run", command=self.run_selected_report).pack(side=tk.LEFT, padx=5)
+        ttk.Button(report_frame, text="Export CSV", command=self.export_selected_report_csv).pack(side=tk.LEFT, padx=5)
+
         # Report display
         self.report_text = scrolledtext.ScrolledText(self.reports_frame, height=30)
         self.report_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-    
+
+    def run_selected_report(self):
+        """Run the report selected in the combobox"""
+        report = self.selected_report_var.get()
+
+        if report == "Risk Assessment Report":
+            self.generate_risk_report()
+        elif report == "Changes Report":
+            self.generate_changes_report()
+        elif report == "Weekly Summary":
+            self.generate_weekly_summary()
+        elif report == "Scan Comparison":
+            self.generate_scan_comparison_report()
+        elif report == "High Risk Comparison":
+            self.generate_high_risk_comparison_report()
+        else:
+            messagebox.showwarning("Select Report", "Please select a report to run.")
+
+    def export_selected_report_csv(self):
+        """Export the selected report to CSV if supported"""
+        report = self.selected_report_var.get()
+
+        if report in ("Scan Comparison", "High Risk Comparison"):
+            self.export_scan_comparison_csv()
+        else:
+            messagebox.showinfo("Not Available", "CSV export not available for this report.")
+
     def add_website(self):
         """Add a new website to monitor"""
         url = self.url_entry.get().strip()
