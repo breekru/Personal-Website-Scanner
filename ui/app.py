@@ -3,6 +3,7 @@ import tkinter as tk
 from urllib.parse import urlparse
 import sqlite3
 
+import risk
 from db import DatabaseManager
 from scanner import additional_security_checks
 from .theme import ThemeManager
@@ -254,5 +255,15 @@ class WebsiteVerificationTool:
         result['additional_checks'].update(
             self.additional_security_checks(url, selected_domain or domain, rdap_data)
         )
+        # Derive a risk score from the collected scan data and persist the
+        # complete result to the database. Database errors are ignored so that
+        # scans can still succeed in environments without the expected schema.
+        result['risk_score'] = risk.calculate_risk_score(result)
+
+        try:
+            self._ensure_db()
+            self.db.save_scan_result(url, result)
+        except Exception:
+            pass
 
         return result
