@@ -1926,7 +1926,7 @@ class WebsiteVerificationTool:
             score += 20
         
         # Registrar issues
-        if scan_result['registrar'] in ['Unknown', 'Whois lookup failed']:
+        if scan_result['registrar'] in ['Unknown', 'Whois lookup failed', 'RDAP lookup failed']:
             score += 15
         
         # NEW: MX record issues
