@@ -44,6 +44,45 @@ def fetch_rdap(domain):
     except Exception:
         return None
 
+
+def parse_registrar_from_rdap(rdap_data):
+    """Extract registrar name from RDAP data.
+
+    Attempts to read the registrar's full name (fn) from the entity's
+    vCard data. If absent, falls back to the organization (org) field, and
+    finally to the entity's handle.
+    """
+    if not rdap_data:
+        return None
+
+    for entity in rdap_data.get('entities', []):
+        if 'registrar' in entity.get('roles', []):
+            vcard = entity.get('vcardArray', [])
+            registrar_name = None
+
+            if len(vcard) > 1:
+                # Look for the full name
+                for item in vcard[1]:
+                    if item[0] == 'fn':
+                        registrar_name = item[3]
+                        break
+
+                # Fallback to organization name if fn not found
+                if not registrar_name:
+                    for item in vcard[1]:
+                        if item[0] == 'org':
+                            registrar_name = item[3]
+                            break
+
+            # Final fallback to entity handle
+            if not registrar_name:
+                registrar_name = entity.get('handle')
+
+            if registrar_name:
+                return registrar_name
+
+    return None
+
 class WebsiteVerificationTool:
     def __init__(self, root):
         self.root = root
@@ -1550,18 +1589,7 @@ class WebsiteVerificationTool:
             try:
                 print("Checking RDAP...")
                 rdap_data = fetch_rdap(domain)
-                registrar = None
-                if rdap_data:
-                    for entity in rdap_data.get('entities', []):
-                        if 'registrar' in entity.get('roles', []):
-                            vcard = entity.get('vcardArray', [])
-                            if len(vcard) > 1:
-                                for item in vcard[1]:
-                                    if item[0] == 'fn':
-                                        registrar = item[3]
-                                        break
-                            if registrar:
-                                break
+                registrar = parse_registrar_from_rdap(rdap_data)
                 result['registrar'] = registrar or 'Unknown'
                 print(f"  Registrar: {result['registrar']}")
             except Exception as rdap_error:
