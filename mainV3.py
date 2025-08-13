@@ -1910,7 +1910,9 @@ class WebsiteVerificationTool:
                 creation_date = None
                 if rdap:
                     for event in rdap.get('events', []):
-                        if event.get('eventAction') == 'registration':
+                        # RDAP may report the domain's start date as either
+                        # "registration" or "creation" depending on the registry
+                        if event.get('eventAction') in ("registration", "creation"):
                             date_str = event.get('eventDate')
                             if date_str:
                                 creation_date = datetime.fromisoformat(
