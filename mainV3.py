@@ -116,6 +116,8 @@ class WebsiteVerificationTool:
 
         # Storage for rows from the last generated report
         self.last_report_rows = []
+        # Storage for diff rows from the last high-risk comparison report
+        self.last_high_risk_diff_rows = []
 
         self.setup_ui()
         self.apply_theme(self.settings.get('theme', 'light'))
@@ -801,7 +803,7 @@ class WebsiteVerificationTool:
         elif report == "Scan Comparison":
             self.export_scan_comparison_csv()
         elif report == "High Risk Comparison":
-            self.export_scan_comparison_csv()
+            self.export_high_risk_comparison_csv()
         else:
             messagebox.showinfo("Not Available", "CSV export not available for this report.")
 
@@ -3106,6 +3108,7 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
     def generate_high_risk_comparison_report(self):
         """Compare scans for high-risk websites"""
         self.last_report_rows = []
+        self.last_high_risk_diff_rows = []
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
@@ -3143,7 +3146,7 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
 
             if curr[1] != prev[1]:
                 changes.append(f"Status Code: {prev[1]} -> {curr[1]}")
-                self.last_report_rows.append({
+                self.last_high_risk_diff_rows.append({
                     "Field": "Status Code",
                     "URL": url,
                     "Previous": prev[1],
@@ -3156,7 +3159,7 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
             curr_ssl = f"valid={curr[2]} issuer={curr[3]} expiry={curr[4]}"
             if prev_ssl != curr_ssl:
                 changes.append(f"SSL: {prev_ssl} -> {curr_ssl}")
-                self.last_report_rows.append({
+                self.last_high_risk_diff_rows.append({
                     "Field": "SSL",
                     "URL": url,
                     "Previous": prev_ssl,
@@ -3169,7 +3172,7 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
             curr_mx = f"{curr[5]} records: {curr[6]}"
             if prev_mx != curr_mx:
                 changes.append(f"MX Records: {prev_mx} -> {curr_mx}")
-                self.last_report_rows.append({
+                self.last_high_risk_diff_rows.append({
                     "Field": "MX Records",
                     "URL": url,
                     "Previous": prev_mx,
@@ -3180,7 +3183,7 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
 
             if curr[7] != prev[7]:
                 changes.append(f"Registrar: {prev[7]} -> {curr[7]}")
-                self.last_report_rows.append({
+                self.last_high_risk_diff_rows.append({
                     "Field": "Registrar",
                     "URL": url,
                     "Previous": prev[7],
@@ -3332,6 +3335,39 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
                 )
                 writer.writeheader()
                 for row in self.last_report_rows:
+                    writer.writerow(row)
+            messagebox.showinfo("Success", f"CSV exported to {file_path}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to export CSV: {e}")
+
+    def export_high_risk_comparison_csv(self):
+        """Export last high risk scan comparison to CSV"""
+        if not self.last_high_risk_diff_rows:
+            messagebox.showwarning("No Data", "Generate a high risk comparison report first.")
+            return
+
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV Files", "*.csv")],
+        )
+        if not file_path:
+            return
+
+        try:
+            with open(file_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(
+                    f,
+                    fieldnames=[
+                        "Field",
+                        "URL",
+                        "Previous",
+                        "Current",
+                        "Prev Scan",
+                        "Current Scan",
+                    ],
+                )
+                writer.writeheader()
+                for row in self.last_high_risk_diff_rows:
                     writer.writerow(row)
             messagebox.showinfo("Success", f"CSV exported to {file_path}")
         except Exception as e:
