@@ -17,8 +17,21 @@ class WebsiteVerificationTool:
         self.db_path = db_path
         self.db = DatabaseManager(db_path)
         self.theme_manager = ThemeManager()
-        self.tree = TaggedTreeview(root)
-        self.tree.pack(fill="both", expand=True)
+        columns = (
+            "id",
+            "url",
+            "name",
+            "added",
+            "last_checked",
+            "status",
+            "manual_status",
+            "notes",
+            "risk",
+        )
+        self.websites_tree = TaggedTreeview(root, columns=columns, show="headings")
+        for col in columns:
+            self.websites_tree.heading(col, text=col.title())
+        self.websites_tree.pack(fill="both", expand=True)
 
     # ---- Database passthrough -------------------------------------------------
     def _ensure_db(self):  # pragma: no cover - used when constructed via __new__
