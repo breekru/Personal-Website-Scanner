@@ -50,10 +50,6 @@ class WebsiteVerificationTool:
         self.root.title("Website Legitimacy Verification Tool")
         self.root.state('zoomed')
 
-        # Track buttons placed in the websites tree early to avoid attribute errors
-        # if other initialization steps fail or trigger callbacks before completion.
-        self.comment_buttons = {}
-
         # Style initialization for modern look
         self.style = ttk.Style()
         self.style.theme_use('clam')
@@ -953,17 +949,6 @@ class WebsiteVerificationTool:
                     comment_icon
                 ), tags=(tag,),
             )
-
-
-            # Overlay a button for comments on this row
-            btn = ttk.Button(
-                self.websites_tree,
-                text="Comments",
-                style="Comment.TButton",
-                command=lambda w_id=website_id: self.show_website_details_window(w_id, focus_comments=True)
-            )
-            self.comment_buttons[item_id] = btn
-            self.position_comment_buttons()
 
         
         conn.close()
@@ -2239,7 +2224,6 @@ class WebsiteVerificationTool:
         """Apply filters to scan results"""
         self.load_scan_results()  # For now, just reload all
     
-
     def view_website_details(self, event=None):
         """View detailed information for selected website"""
         selection = self.websites_tree.selection()
@@ -2533,6 +2517,8 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
             self.update_database_schema()
             self.settings = self.load_settings()
             self.load_websites()
+
+
 
         settings_to_save = {
             'email_smtp_server': self.smtp_server_entry.get(),
