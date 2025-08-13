@@ -117,6 +117,9 @@ class WebsiteVerificationTool:
         # Storage for last scan comparison changes
         self.last_changes_rows = []
 
+        # Storage for last weekly summary rows
+        self.last_weekly_summary_rows = []
+
         self.setup_ui()
         self.apply_theme(self.settings.get('theme', 'light'))
         self.load_websites()
@@ -794,6 +797,8 @@ class WebsiteVerificationTool:
 
         if report in ("Scan Comparison", "High Risk Comparison"):
             self.export_scan_comparison_csv()
+        elif report == "Weekly Summary":
+            self.export_weekly_summary_csv()
         else:
             messagebox.showinfo("Not Available", "CSV export not available for this report.")
 
@@ -2881,45 +2886,92 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
     def generate_weekly_summary(self):
         """Generate weekly summary report"""
         week_ago = datetime.now() - timedelta(days=7)
-        
+        self.last_weekly_summary_rows = []
+
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
+
         cursor.execute('''
-            SELECT COUNT(*) FROM scan_results 
+            SELECT COUNT(*) FROM scan_results
             WHERE scan_date >= ?
         ''', (week_ago.isoformat(),))
         scans_this_week = cursor.fetchone()[0]
-        
+
         cursor.execute('''
-            SELECT COUNT(*) FROM scan_results 
+            SELECT COUNT(*) FROM scan_results
             WHERE scan_date >= ? AND changes_detected = 1
         ''', (week_ago.isoformat(),))
         changes_this_week = cursor.fetchone()[0]
-        
+
         cursor.execute('''
-            SELECT COUNT(*) FROM scan_results 
+            SELECT COUNT(*) FROM scan_results
             WHERE scan_date >= ? AND risk_score >= 50
         ''', (week_ago.isoformat(),))
         high_risk_this_week = cursor.fetchone()[0]
-        
-        conn.close()
-        
+
         report = f"WEEKLY SUMMARY REPORT\n"
         report += f"Period: {week_ago.strftime('%Y-%m-%d')} to {datetime.now().strftime('%Y-%m-%d')}\n"
         report += "="*60 + "\n\n"
         report += f"Total Scans Performed: {scans_this_week}\n"
         report += f"Changes Detected: {changes_this_week}\n"
         report += f"High Risk Detections: {high_risk_this_week}\n\n"
-        
+
         if changes_this_week > 0 or high_risk_this_week > 0:
             report += "⚠️  ACTION REQUIRED: Review high-risk sites and investigate changes\n"
         else:
             report += "✅ No critical issues detected this week\n"
-        
+
+        # Build per-site summary
+        report += "\nPer-Site Latest Scan Summary\n"
+        report += "=" * 60 + "\n"
+        header = f"{'URL':30} {'Last Scan':20} {'Status':>6} {'Risk':>5} {'SSL':>5} {'MX':>5}"
+        report += header + "\n"
+        report += "-" * 60 + "\n"
+
+        cursor.execute("SELECT id, url FROM websites")
+        websites = cursor.fetchall()
+        for site_id, url in websites:
+            cursor.execute(
+                """
+                SELECT scan_date, status_code, risk_score, ssl_valid, mx_record_count
+                FROM scan_results
+                WHERE website_id = ?
+                ORDER BY scan_date DESC
+                LIMIT 1
+                """,
+                (site_id,),
+            )
+            row = cursor.fetchone()
+            if row:
+                scan_date, status_code, risk_score, ssl_valid, mx_count = row
+                scan_date_str = scan_date
+                ssl_str = "Yes" if ssl_valid else "No"
+                mx_str = mx_count if mx_count is not None else "-"
+                report += f"{url:30} {scan_date_str:20} {status_code!s:>6} {risk_score!s:>5} {ssl_str:>5} {mx_str!s:>5}\n"
+                self.last_weekly_summary_rows.append({
+                    "URL": url,
+                    "Last Scan": scan_date_str,
+                    "Status Code": status_code,
+                    "Risk Score": risk_score,
+                    "SSL Valid": ssl_valid,
+                    "MX Record Count": mx_count,
+                })
+            else:
+                report += f"{url:30} {'No scans':20} {'-':>6} {'-':>5} {'-':>5} {'-':>5}\n"
+                self.last_weekly_summary_rows.append({
+                    "URL": url,
+                    "Last Scan": None,
+                    "Status Code": None,
+                    "Risk Score": None,
+                    "SSL Valid": None,
+                    "MX Record Count": None,
+                })
+
+        conn.close()
+
         self.report_text.delete(1.0, tk.END)
         self.report_text.insert(1.0, report)
-        
+
         # Send email notification if enabled
         if self.settings.get('notification_emails'):
             self.send_notification_email("Weekly Website Security Summary", report)
@@ -3127,6 +3179,38 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
 
         self.report_text.delete(1.0, tk.END)
         self.report_text.insert(1.0, report)
+    def export_weekly_summary_csv(self):
+        """Export last weekly summary to CSV"""
+        if not self.last_weekly_summary_rows:
+            messagebox.showwarning("No Data", "Generate a weekly summary report first.")
+            return
+
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV Files", "*.csv")],
+        )
+        if not file_path:
+            return
+
+        try:
+            with open(file_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(
+                    f,
+                    fieldnames=[
+                        "URL",
+                        "Last Scan",
+                        "Status Code",
+                        "Risk Score",
+                        "SSL Valid",
+                        "MX Record Count",
+                    ],
+                )
+                writer.writeheader()
+                for row in self.last_weekly_summary_rows:
+                    writer.writerow(row)
+            messagebox.showinfo("Success", f"CSV exported to {file_path}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to export CSV: {e}")
 
     def export_scan_comparison_csv(self):
         """Export last scan comparison to CSV"""
