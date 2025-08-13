@@ -114,11 +114,8 @@ class WebsiteVerificationTool:
         self.is_scanning = False
         self.scan_cancelled = False
 
-        # Storage for last scan comparison changes
-        self.last_changes_rows = []
-
-        # Storage for last weekly summary rows
-        self.last_weekly_summary_rows = []
+        # Storage for rows from the last generated report
+        self.last_report_rows = []
 
         self.setup_ui()
         self.apply_theme(self.settings.get('theme', 'light'))
@@ -795,10 +792,16 @@ class WebsiteVerificationTool:
         """Export the selected report to CSV if supported"""
         report = self.selected_report_var.get()
 
-        if report in ("Scan Comparison", "High Risk Comparison"):
-            self.export_scan_comparison_csv()
+        if report == "Risk Assessment Report":
+            self.export_risk_report_csv()
+        elif report == "Changes Report":
+            self.export_changes_report_csv()
         elif report == "Weekly Summary":
             self.export_weekly_summary_csv()
+        elif report == "Scan Comparison":
+            self.export_scan_comparison_csv()
+        elif report == "High Risk Comparison":
+            self.export_scan_comparison_csv()
         else:
             messagebox.showinfo("Not Available", "CSV export not available for this report.")
 
@@ -2804,7 +2807,21 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
         
         results = cursor.fetchall()
         conn.close()
-        
+
+        # Store structured data for CSV export
+        self.last_report_rows = [
+            {
+                "URL": r[0],
+                "Risk Score": r[1],
+                "Last Scan": r[2],
+                "SSL Valid": "Yes" if r[3] else "No",
+                "Changes Detected": "Yes" if r[4] else "No",
+                "MX Record Count": r[6],
+                "MX Check Status": r[7],
+            }
+            for r in results
+        ]
+
         report = f"WEBSITE RISK ASSESSMENT REPORT\n"
         report += f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
         report += "="*60 + "\n\n"
@@ -2866,7 +2883,17 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
         
         results = cursor.fetchall()
         conn.close()
-        
+
+        # Store structured data for CSV export
+        self.last_report_rows = [
+            {
+                "URL": site[0],
+                "Change Detected": site[1],
+                "Risk Score": site[3],
+            }
+            for site in results
+        ]
+
         report = f"WEBSITE CHANGES DETECTION REPORT\n"
         report += f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
         report += "="*60 + "\n\n"
@@ -2886,7 +2913,7 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
     def generate_weekly_summary(self):
         """Generate weekly summary report"""
         week_ago = datetime.now() - timedelta(days=7)
-        self.last_weekly_summary_rows = []
+        self.last_report_rows = []
 
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
@@ -2948,7 +2975,7 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
                 ssl_str = "Yes" if ssl_valid else "No"
                 mx_str = mx_count if mx_count is not None else "-"
                 report += f"{url:30} {scan_date_str:20} {status_code!s:>6} {risk_score!s:>5} {ssl_str:>5} {mx_str!s:>5}\n"
-                self.last_weekly_summary_rows.append({
+                self.last_report_rows.append({
                     "URL": url,
                     "Last Scan": scan_date_str,
                     "Status Code": status_code,
@@ -2958,7 +2985,7 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
                 })
             else:
                 report += f"{url:30} {'No scans':20} {'-':>6} {'-':>5} {'-':>5} {'-':>5}\n"
-                self.last_weekly_summary_rows.append({
+                self.last_report_rows.append({
                     "URL": url,
                     "Last Scan": None,
                     "Status Code": None,
@@ -2978,7 +3005,7 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
 
     def generate_scan_comparison_report(self):
         """Compare most recent scans against previous ones"""
-        self.last_changes_rows = []
+        self.last_report_rows = []
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
@@ -3012,7 +3039,7 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
 
             if curr[1] != prev[1]:
                 changes.append(f"Status Code: {prev[1]} -> {curr[1]}")
-                self.last_changes_rows.append({
+                self.last_report_rows.append({
                     "Field": "Status Code",
                     "URL": url,
                     "Previous": prev[1],
@@ -3025,7 +3052,7 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
             curr_ssl = f"valid={curr[2]} issuer={curr[3]} expiry={curr[4]}"
             if prev_ssl != curr_ssl:
                 changes.append(f"SSL: {prev_ssl} -> {curr_ssl}")
-                self.last_changes_rows.append({
+                self.last_report_rows.append({
                     "Field": "SSL",
                     "URL": url,
                     "Previous": prev_ssl,
@@ -3038,7 +3065,7 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
             curr_mx = f"{curr[5]} records: {curr[6]}"
             if prev_mx != curr_mx:
                 changes.append(f"MX Records: {prev_mx} -> {curr_mx}")
-                self.last_changes_rows.append({
+                self.last_report_rows.append({
                     "Field": "MX Records",
                     "URL": url,
                     "Previous": prev_mx,
@@ -3049,7 +3076,7 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
 
             if curr[7] != prev[7]:
                 changes.append(f"Registrar: {prev[7]} -> {curr[7]}")
-                self.last_changes_rows.append({
+                self.last_report_rows.append({
                     "Field": "Registrar",
                     "URL": url,
                     "Previous": prev[7],
@@ -3078,7 +3105,7 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
 
     def generate_high_risk_comparison_report(self):
         """Compare scans for high-risk websites"""
-        self.last_changes_rows = []
+        self.last_report_rows = []
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
@@ -3116,7 +3143,7 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
 
             if curr[1] != prev[1]:
                 changes.append(f"Status Code: {prev[1]} -> {curr[1]}")
-                self.last_changes_rows.append({
+                self.last_report_rows.append({
                     "Field": "Status Code",
                     "URL": url,
                     "Previous": prev[1],
@@ -3129,7 +3156,7 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
             curr_ssl = f"valid={curr[2]} issuer={curr[3]} expiry={curr[4]}"
             if prev_ssl != curr_ssl:
                 changes.append(f"SSL: {prev_ssl} -> {curr_ssl}")
-                self.last_changes_rows.append({
+                self.last_report_rows.append({
                     "Field": "SSL",
                     "URL": url,
                     "Previous": prev_ssl,
@@ -3142,7 +3169,7 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
             curr_mx = f"{curr[5]} records: {curr[6]}"
             if prev_mx != curr_mx:
                 changes.append(f"MX Records: {prev_mx} -> {curr_mx}")
-                self.last_changes_rows.append({
+                self.last_report_rows.append({
                     "Field": "MX Records",
                     "URL": url,
                     "Previous": prev_mx,
@@ -3153,7 +3180,7 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
 
             if curr[7] != prev[7]:
                 changes.append(f"Registrar: {prev[7]} -> {curr[7]}")
-                self.last_changes_rows.append({
+                self.last_report_rows.append({
                     "Field": "Registrar",
                     "URL": url,
                     "Previous": prev[7],
@@ -3179,9 +3206,74 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
 
         self.report_text.delete(1.0, tk.END)
         self.report_text.insert(1.0, report)
+
+    def export_risk_report_csv(self):
+        """Export last risk assessment report to CSV"""
+        if not self.last_report_rows:
+            messagebox.showwarning("No Data", "Generate a risk assessment report first.")
+            return
+
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV Files", "*.csv")],
+        )
+        if not file_path:
+            return
+
+        try:
+            with open(file_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(
+                    f,
+                    fieldnames=[
+                        "URL",
+                        "Risk Score",
+                        "Last Scan",
+                        "SSL Valid",
+                        "Changes Detected",
+                        "MX Record Count",
+                        "MX Check Status",
+                    ],
+                )
+                writer.writeheader()
+                for row in self.last_report_rows:
+                    writer.writerow(row)
+            messagebox.showinfo("Success", f"CSV exported to {file_path}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to export CSV: {e}")
+
+    def export_changes_report_csv(self):
+        """Export last changes report to CSV"""
+        if not self.last_report_rows:
+            messagebox.showwarning("No Data", "Generate a changes report first.")
+            return
+
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV Files", "*.csv")],
+        )
+        if not file_path:
+            return
+
+        try:
+            with open(file_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(
+                    f,
+                    fieldnames=[
+                        "URL",
+                        "Change Detected",
+                        "Risk Score",
+                    ],
+                )
+                writer.writeheader()
+                for row in self.last_report_rows:
+                    writer.writerow(row)
+            messagebox.showinfo("Success", f"CSV exported to {file_path}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to export CSV: {e}")
+
     def export_weekly_summary_csv(self):
         """Export last weekly summary to CSV"""
-        if not self.last_weekly_summary_rows:
+        if not self.last_report_rows:
             messagebox.showwarning("No Data", "Generate a weekly summary report first.")
             return
 
@@ -3206,7 +3298,7 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
                     ],
                 )
                 writer.writeheader()
-                for row in self.last_weekly_summary_rows:
+                for row in self.last_report_rows:
                     writer.writerow(row)
             messagebox.showinfo("Success", f"CSV exported to {file_path}")
         except Exception as e:
@@ -3214,7 +3306,7 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
 
     def export_scan_comparison_csv(self):
         """Export last scan comparison to CSV"""
-        if not self.last_changes_rows:
+        if not self.last_report_rows:
             messagebox.showwarning("No Data", "Generate a scan comparison report first.")
             return
 
@@ -3239,7 +3331,7 @@ Additional Checks: {scan[15] if len(scan) > 15 else scan[12]}
                     ],
                 )
                 writer.writeheader()
-                for row in self.last_changes_rows:
+                for row in self.last_report_rows:
                     writer.writerow(row)
             messagebox.showinfo("Success", f"CSV exported to {file_path}")
         except Exception as e:
