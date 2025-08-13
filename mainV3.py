@@ -1546,12 +1546,13 @@ class WebsiteVerificationTool:
             print(f"Starting checks for {url} (domain: {domain})")
             
             # 1. Registrar check using RDAP
+            rdap_data = None
             try:
                 print("Checking RDAP...")
-                rdap = fetch_rdap(domain)
+                rdap_data = fetch_rdap(domain)
                 registrar = None
-                if rdap:
-                    for entity in rdap.get('entities', []):
+                if rdap_data:
+                    for entity in rdap_data.get('entities', []):
                         if 'registrar' in entity.get('roles', []):
                             vcard = entity.get('vcardArray', [])
                             if len(vcard) > 1:
@@ -1648,7 +1649,9 @@ class WebsiteVerificationTool:
                 print(f"  HTTP error: {http_error}")
             
             # 5. Additional security checks
-            result['additional_checks'].update(self.additional_security_checks(url, domain))
+            result['additional_checks'].update(
+                self.additional_security_checks(url, domain, rdap_data)
+            )
             
         except Exception as e:
             result['additional_checks']['scan_error'] = str(e)
@@ -1853,10 +1856,17 @@ class WebsiteVerificationTool:
         
         print("  " + "="*50)
     
-    def additional_security_checks(self, url, domain):
-        """Additional security and legitimacy checks"""
+    def additional_security_checks(self, url, domain, rdap_data=None):
+        """Additional security and legitimacy checks.
+
+        Args:
+            url: The full URL being checked.
+            domain: The domain extracted from the URL.
+            rdap_data: Optional pre-fetched RDAP JSON to avoid
+                duplicate network requests.
+        """
         checks = {}
-        
+
         try:
             # Check for suspicious patterns in domain
             suspicious_patterns = ['paypal', 'amazon', 'microsoft', 'google', 'apple']
@@ -1866,16 +1876,18 @@ class WebsiteVerificationTool:
                 if pattern in domain_lower and not domain_lower.endswith(f'{pattern}.com'):
                     checks['suspicious_domain'] = f"Contains '{pattern}' but not official domain"
             
-            # Check domain age via RDAP
+            # Check domain age via RDAP using cached data if available
             try:
-                rdap = fetch_rdap(domain)
+                rdap = rdap_data or fetch_rdap(domain)
                 creation_date = None
                 if rdap:
                     for event in rdap.get('events', []):
                         if event.get('eventAction') == 'registration':
                             date_str = event.get('eventDate')
                             if date_str:
-                                creation_date = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                                creation_date = datetime.fromisoformat(
+                                    date_str.replace('Z', '+00:00')
+                                )
                             break
                 if creation_date:
                     age_days = (datetime.now(timezone.utc) - creation_date).days
