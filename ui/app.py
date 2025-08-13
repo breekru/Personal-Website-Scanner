@@ -1,23 +1,47 @@
 """Tkinter application components."""
 import tkinter as tk
+from tkinter import ttk
 from urllib.parse import urlparse
 import sqlite3
 
 import risk
 from db import DatabaseManager
 from scanner import additional_security_checks
-from .theme import ThemeManager
+from .theme import ThemeManager, _HAS_TTKB
 from .widgets import TaggedTreeview
 
 
 class WebsiteVerificationTool:
     """Main application class extracted from the monolithic script."""
 
-    def __init__(self, root: tk.Misc, db_path: str = "website_verification.db"):
+    def __init__(
+        self,
+        root: tk.Misc,
+        db_path: str = "website_verification.db",
+        theme: str | None = None,
+    ):
         self.root = root
         self.db_path = db_path
         self.db = DatabaseManager(db_path)
-        self.theme_manager = ThemeManager()
+        self.theme_manager = ThemeManager(theme or "litera")
+        self.theme_manager.apply(self.root)
+
+        if _HAS_TTKB:
+            themes = self.theme_manager.style.theme_names()
+            current_theme = self.theme_manager.style.theme_use()
+            self._theme_var = tk.StringVar(value=current_theme)
+            selector = ttk.Combobox(
+                root,
+                values=themes,
+                textvariable=self._theme_var,
+                state="readonly",
+            )
+            selector.pack(fill="x")
+            selector.bind(
+                "<<ComboboxSelected>>",
+                lambda _e: self.theme_manager.style.theme_use(self._theme_var.get()),
+            )
+
         columns = (
             "id",
             "url",
@@ -33,6 +57,7 @@ class WebsiteVerificationTool:
         for col in columns:
             self.websites_tree.heading(col, text=col.title())
         self.websites_tree.pack(fill="both", expand=True)
+        self.theme_manager.apply(self.websites_tree)
 
     # ---- Database passthrough -------------------------------------------------
     def _ensure_db(self):  # pragma: no cover - used when constructed via __new__
