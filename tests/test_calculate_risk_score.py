@@ -25,6 +25,7 @@ _urllib3.exceptions = _urllib3_exceptions
 sys.modules['urllib3'] = _urllib3
 sys.modules['urllib3.exceptions'] = _urllib3_exceptions
 
+from risk import calculate_risk_score, DEFAULT_WEIGHTS
 from mainV3 import WebsiteVerificationTool
 
 
@@ -50,13 +51,53 @@ class DummyTree:
 
 def test_rdap_lookup_failed_increases_risk_score():
     """Ensure RDAP lookup failures affect the risk score."""
-    tool = WebsiteVerificationTool.__new__(WebsiteVerificationTool)
     scan_result = {
         'ssl_valid': True,
         'status_code': 200,
         'registrar': 'RDAP lookup failed'
     }
-    assert tool.calculate_risk_score(scan_result) == 15
+    assert calculate_risk_score(scan_result) == DEFAULT_WEIGHTS['registrar_unknown']
+
+
+def test_custom_weights_adjust_score_and_capped():
+    """Custom configuration should change weighting and remain within 0-100."""
+    scan_result = {
+        'ssl_valid': False,
+        'status_code': 500,
+        'registrar': 'Unknown',
+        'mx_check_status': 'error',
+        'mx_record_count': 0,
+        'additional_checks': {'domain_age_days': 10}
+    }
+    default_score = calculate_risk_score(scan_result)
+    custom_config = {
+        'ssl_invalid': 60,
+        'http_status_bad': 40,
+        'registrar_unknown': 20,
+        'mx_error': 20,
+        'young_domain_penalty': 20,
+    }
+    custom_score = calculate_risk_score(scan_result, custom_config)
+    assert custom_score > default_score
+    assert 0 <= custom_score <= 100
+
+
+def test_domain_age_threshold_can_be_tuned():
+    """Adjusting the young domain threshold should affect scoring."""
+    scan_result = {
+        'ssl_valid': True,
+        'status_code': 200,
+        'registrar': 'Example',
+        'mx_check_status': 'not_checked',
+        'additional_checks': {'domain_age_days': 400}
+    }
+    default_score = calculate_risk_score(scan_result)
+    custom_score = calculate_risk_score(scan_result, {
+        'young_domain_days': 500,
+        'young_domain_penalty': 20,
+    })
+    assert default_score == 0
+    assert custom_score == 20
 
 
 def test_manual_high_risk_updates_scan_results(tmp_path):
