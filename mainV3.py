@@ -1921,9 +1921,14 @@ class WebsiteVerificationTool:
                             break
                 if creation_date:
                     age_days = (datetime.now(timezone.utc) - creation_date).days
+                    if age_days < 0:
+                        age_days = 0
                     checks['domain_age_days'] = age_days
                     if age_days < 30:
                         checks['new_domain_warning'] = "Domain is less than 30 days old"
+                else:
+                    checks['domain_age_days'] = None
+                    checks['domain_age_error'] = "Creation date not found"
             except Exception as e:
                 checks['domain_age_error'] = str(e)
             
