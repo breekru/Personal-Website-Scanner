@@ -2004,11 +2004,15 @@ class WebsiteVerificationTool:
 
         return min(score, 100)  # Cap at 100
 
-    def start_scan_progress(self, total):
+    def start_scan_progress(self, total, first_url=None):
         """Show and initialize the scan progress bar"""
         self.scan_progress['value'] = 0
         self.scan_progress['maximum'] = total
-        self.scan_status_label.config(text=f"Scanning 0/{total}...")
+        if first_url:
+            label_text = f"Scanning {first_url} (0/{total})..."
+        else:
+            label_text = f"Scanning (0/{total})..."
+        self.scan_status_label.config(text=label_text)
         self.cancel_scan_button.config(state=tk.NORMAL)
 
         if not self.progress_frame.winfo_manager():
@@ -2018,10 +2022,10 @@ class WebsiteVerificationTool:
             self.scan_status_label.pack(side=tk.LEFT)
             self.cancel_scan_button.pack(side=tk.RIGHT)
 
-    def update_scan_progress(self, current, total):
+    def update_scan_progress(self, current, total, current_url):
         """Update progress bar and status label"""
         self.scan_progress['value'] = current
-        self.scan_status_label.config(text=f"Scanning {current}/{total}...")
+        self.scan_status_label.config(text=f"Scanning {current_url} ({current}/{total})...")
 
     def reset_scan_progress(self):
         """Hide and reset the progress bar"""
@@ -2061,15 +2065,19 @@ class WebsiteVerificationTool:
             conn.close()
 
             total_websites = len(websites)
-            self.root.after(0, lambda: self.start_scan_progress(total_websites))
+            first_url = websites[0][1] if websites else None
+            self.root.after(0, lambda url=first_url: self.start_scan_progress(total_websites, url))
 
             max_workers = int(self.settings.get('scan_threads', 5))
             executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
-            futures = [executor.submit(self.scan_website_with_retries, wid, url) for wid, url in websites]
+            future_to_url = {
+                executor.submit(self.scan_website_with_retries, wid, url): url
+                for wid, url in websites
+            }
 
             completed = 0
             try:
-                for future in concurrent.futures.as_completed(futures):
+                for future in concurrent.futures.as_completed(future_to_url):
                     if self.scan_cancelled:
                         executor.shutdown(cancel_futures=True)
                         self.root.after(0, lambda: self.scan_status_label.config(text="Scan cancelled"))
@@ -2079,9 +2087,10 @@ class WebsiteVerificationTool:
                     except Exception as e:
                         print(f"Error scanning: {e}")
                     completed += 1
+                    url = future_to_url[future]
                     self.root.after(0, self.load_websites)
                     self.root.after(0, self.load_scan_results)
-                    self.root.after(0, lambda c=completed: self.update_scan_progress(c, total_websites))
+                    self.root.after(0, lambda c=completed, u=url: self.update_scan_progress(c, total_websites, u))
             finally:
                 if not self.scan_cancelled:
                     executor.shutdown()
@@ -2104,20 +2113,22 @@ class WebsiteVerificationTool:
 
         def scan_thread():
             total_selected = len(selection)
-            self.root.after(0, lambda: self.start_scan_progress(total_selected))
+            first_url = self.websites_tree.item(selection[0])['values'][0] if selection else None
+            self.root.after(0, lambda url=first_url: self.start_scan_progress(total_selected, url))
 
             max_workers = int(self.settings.get('scan_threads', 5))
             executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
-            futures = []
+            future_to_url = {}
             for item in selection:
                 values = self.websites_tree.item(item)['values']
                 website_id = int(item)
                 url = values[0]
-                futures.append(executor.submit(self.scan_website_with_retries, website_id, url))
+                future = executor.submit(self.scan_website_with_retries, website_id, url)
+                future_to_url[future] = url
 
             completed = 0
             try:
-                for future in concurrent.futures.as_completed(futures):
+                for future in concurrent.futures.as_completed(future_to_url):
                     if self.scan_cancelled:
                         executor.shutdown(cancel_futures=True)
                         self.root.after(0, lambda: self.scan_status_label.config(text="Scan cancelled"))
@@ -2127,9 +2138,10 @@ class WebsiteVerificationTool:
                     except Exception as e:
                         print(f"Error scanning: {e}")
                     completed += 1
+                    url = future_to_url[future]
                     self.root.after(0, self.load_websites)
                     self.root.after(0, self.load_scan_results)
-                    self.root.after(0, lambda c=completed: self.update_scan_progress(c, total_selected))
+                    self.root.after(0, lambda c=completed, u=url: self.update_scan_progress(c, total_selected, u))
             finally:
                 if not self.scan_cancelled:
                     executor.shutdown()
