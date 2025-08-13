@@ -1,3 +1,4 @@
 {
-  "db_path": "website_verification.db"
+  "db_path": "website_verification.db",
+  "risk_config": {}
 }

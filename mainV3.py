@@ -22,6 +22,7 @@ import sys
 import warnings
 import dns.resolver  # NEW: For MX record lookups
 import dns.exception  # NEW: For DNS exceptions
+from risk import calculate_risk_score
 
 # Suppress SSL warnings for intentional unverified requests
 from urllib3.exceptions import InsecureRequestWarning
@@ -95,7 +96,9 @@ class WebsiteVerificationTool:
 
         # Configuration and database setup
         self.config_path = os.path.join(os.path.dirname(__file__), 'config.json')
-        self.db_path = self.load_config().get('db_path', 'website_verification.db')
+        self.config = self.load_config()
+        self.db_path = self.config.get('db_path', 'website_verification.db')
+        self.risk_config = self.config.get('risk_config', {})
         self.init_database()
         self.update_database_schema()  # Ensure MX columns exist
 
@@ -1284,7 +1287,7 @@ class WebsiteVerificationTool:
                 print(f"Change details: {'; '.join(change_details)}")
             
             # Calculate risk score
-            risk_score = self.calculate_risk_score(scan_result)
+            risk_score = calculate_risk_score(scan_result, getattr(self, 'risk_config', None))
             scan_result['risk_score'] = risk_score
             
             # Save results to database - UPDATED to include MX data
@@ -2042,62 +2045,6 @@ class WebsiteVerificationTool:
         
         return checks
     
-    def calculate_risk_score(self, scan_result):
-        """Calculate risk score based on scan results including MX record issues"""
-        score = 0
-        
-        # SSL issues
-        if not scan_result['ssl_valid']:
-            score += 30
-        
-        # HTTP status issues
-        if scan_result['status_code'] >= 400:
-            score += 20
-        
-        # Registrar issues
-        if scan_result['registrar'] in ['Unknown', 'Whois lookup failed', 'RDAP lookup failed']:
-            score += 15
-        
-        # NEW: MX record issues
-        mx_check_status = scan_result.get('mx_check_status', 'not_checked')
-        mx_record_count = scan_result.get('mx_record_count', 0)
-
-        if mx_check_status == 'error':
-            score += 10  # MX check failed
-        elif mx_check_status == 'success' and mx_record_count == 0:
-            score += 5   # No mail servers (less critical but still noteworthy)
-
-        # Even when MX records exist, they can present email-based threat vectors
-        if mx_check_status == 'success' and mx_record_count > 0:
-            score += 5
-
-        # Additional checks
-        additional = scan_result.get('additional_checks', {})
-
-        # Penalize relatively new domains
-        domain_age_days = additional.get('domain_age_days')
-        if domain_age_days is not None and domain_age_days < 365:
-            score += 10
-        
-        if 'suspicious_domain' in additional:
-            score += 40
-        
-        if 'new_domain_warning' in additional:
-            score += 25
-        
-        if additional.get('https_redirect') == False:
-            score += 10
-
-        # Changes detected
-        if scan_result.get('changes_detected'):
-            # Check if MX changes are involved (more serious)
-            if 'mx_change_details' in additional:
-                score += 25  # MX changes are more critical
-            else:
-                score += 20  # Regular changes
-
-        return min(score, 100)  # Cap at 100
-
     def start_scan_progress(self, total, first_url=None):
         """Show and initialize the scan progress bar"""
         self.scan_progress['value'] = 0
