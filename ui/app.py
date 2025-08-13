@@ -86,26 +86,109 @@ class WebsiteVerificationTool:
     def additional_security_checks(self, url, domain, rdap_data=None):
         return additional_security_checks(url, domain, rdap_data)
 
-    def perform_mx_check(self, domain):  # pragma: no cover - stub
-        return {
-            'mx_record_count': 0,
-            'mx_records': '',
-            'mx_check_status': 'error',
-            'mx_error': 'not_implemented',
+    def perform_mx_check(self, domain):
+        """Return MX record information for *domain*.
+
+        The return dictionary contains ``mx_record_count``, ``mx_records`` as a
+        comma separated string, ``mx_check_status`` which is ``"success"`` or
+        ``"error"`` and ``mx_error`` with any error message.  This mirrors the
+        fields consumed by :func:`risk.calculate_risk_score`.
+        """
+        result = {
+            "mx_record_count": 0,
+            "mx_records": "",
+            "mx_check_status": "error",
+            "mx_error": "",
         }
 
-    def perform_ssl_check(self, domain):  # pragma: no cover - stub
-        return {
-            'ssl_valid': False,
-            'ssl_issuer': '',
-            'ssl_expiry': '',
-            'ssl_error': 'not_implemented',
-            'ssl_version': None,
-            'ssl_cipher': None,
+        try:
+            try:  # Lazy import so tests without dnspython can still run
+                import dns.resolver  # type: ignore
+            except Exception as exc:  # pragma: no cover - import failure path
+                result["mx_error"] = f"dns_import_error: {exc}"
+                return result
+
+            answers = dns.resolver.resolve(domain, "MX")
+            records = sorted(str(r.exchange).rstrip(".") for r in answers)
+            result["mx_record_count"] = len(records)
+            result["mx_records"] = ",".join(records)
+            result["mx_check_status"] = "success"
+        except dns.resolver.NoAnswer:
+            # No MX records is still considered a successful lookup
+            result["mx_check_status"] = "success"
+            result["mx_error"] = "no_answer"
+        except dns.resolver.NXDOMAIN:
+            result["mx_error"] = "nxdomain"
+        except Exception as exc:  # pragma: no cover - defensive
+            result["mx_error"] = str(exc)
+
+        return result
+
+    def perform_ssl_check(self, domain):
+        """Validate the SSL certificate for *domain*.
+
+        Returns a dictionary with ``ssl_valid`` (bool), ``ssl_issuer`` and
+        ``ssl_expiry`` strings plus ``ssl_error`` (``""`` if none).  Additional
+        diagnostic information such as ``ssl_version`` and ``ssl_cipher`` is
+        included but not used directly by the risk calculation.
+        """
+        result = {
+            "ssl_valid": False,
+            "ssl_issuer": "",
+            "ssl_expiry": "",
+            "ssl_error": "",
+            "ssl_version": None,
+            "ssl_cipher": None,
         }
 
-    def normalize_content_for_hashing(self, content):  # pragma: no cover - stub
-        return content
+        try:
+            import socket
+            import ssl
+            from datetime import datetime
+
+            context = ssl.create_default_context()
+            with socket.create_connection((domain, 443), timeout=5) as sock:
+                with context.wrap_socket(sock, server_hostname=domain) as ssock:
+                    cert = ssock.getpeercert()
+                    issuer_parts = dict(x[0] for x in cert.get("issuer", []))
+                    result["ssl_issuer"] = issuer_parts.get("organizationName", "")
+                    not_after = cert.get("notAfter")
+                    if not_after:
+                        try:
+                            expiry = datetime.strptime(not_after, "%b %d %H:%M:%S %Y %Z")
+                            result["ssl_expiry"] = expiry.isoformat()
+                        except Exception:  # pragma: no cover - parsing failures
+                            result["ssl_expiry"] = not_after
+                    result["ssl_valid"] = True
+                    result["ssl_version"] = ssock.version()
+                    cipher = ssock.cipher()
+                    if cipher:
+                        result["ssl_cipher"] = cipher[0]
+        except Exception as exc:  # pragma: no cover - network/SSL errors
+            result["ssl_error"] = str(exc)
+
+        return result
+
+    def normalize_content_for_hashing(self, content):
+        """Return *content* with volatile portions stripped.
+
+        Removing timestamps and script contents helps provide a stable hash when
+        the scanned site injects dynamic values on each request.
+        """
+        import re
+
+        patterns = [
+            r"<script.*?>.*?</script>",  # strip script tags
+            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z?",  # ISO timestamps
+            r"Date:[^\n]+",  # HTTP style date headers
+            r"[0-9]{10,}",  # long integers (e.g., epoch timestamps)
+        ]
+
+        normalized = content
+        for pattern in patterns:
+            normalized = re.sub(pattern, "", normalized, flags=re.IGNORECASE | re.DOTALL)
+
+        return normalized
 
     def perform_website_checks(self, url):
         """Perform registrar, MX, SSL and additional checks for *url*."""
