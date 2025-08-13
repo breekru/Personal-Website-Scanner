@@ -1581,45 +1581,87 @@ class WebsiteVerificationTool:
             # Parse URL
             parsed_url = urlparse(url)
             domain = parsed_url.netloc
-            
+
             print(f"Starting checks for {url} (domain: {domain})")
-            
+
+            # Build domain variants list (original and with/without www.)
+            domain_variants = [domain]
+            if domain.startswith("www."):
+                domain_variants.append(domain[4:])
+            else:
+                domain_variants.append("www." + domain)
+            # Remove duplicates while preserving order
+            domain_variants = list(dict.fromkeys(domain_variants))
+
+            selected_domain = None  # Track which variant succeeds
+
             # 1. Registrar check using RDAP
             rdap_data = None
-            try:
-                print("Checking RDAP...")
-                rdap_data = fetch_rdap(domain)
-                registrar = parse_registrar_from_rdap(rdap_data)
-                result['registrar'] = registrar or 'Unknown'
-                print(f"  Registrar: {result['registrar']}")
-            except Exception as rdap_error:
+            domains_to_try = ([selected_domain] if selected_domain else []) + [
+                d for d in domain_variants if d != selected_domain
+            ]
+            for candidate in domains_to_try:
+                try:
+                    print(f"Checking RDAP for {candidate}...")
+                    rdap_candidate = fetch_rdap(candidate)
+                    if rdap_candidate:
+                        registrar = parse_registrar_from_rdap(rdap_candidate)
+                        result['registrar'] = registrar or 'Unknown'
+                        rdap_data = rdap_candidate
+                        selected_domain = candidate
+                        print(f"  Registrar: {result['registrar']}")
+                        break
+                except Exception as rdap_error:
+                    print(f"  RDAP error: {rdap_error}")
+            if rdap_data is None:
                 result['registrar'] = 'RDAP lookup failed'
-                print(f"  RDAP error: {rdap_error}")
-            
+
             # 2. NEW: MX Record check
             print("Checking MX records...")
-            mx_result = self.perform_mx_check(domain)
+            domains_to_try = ([selected_domain] if selected_domain else []) + [
+                d for d in domain_variants if d != selected_domain
+            ]
+            mx_result = None
+            for candidate in domains_to_try:
+                mx_candidate = self.perform_mx_check(candidate)
+                mx_result = mx_candidate
+                if mx_candidate['mx_check_status'] != 'error':
+                    selected_domain = candidate
+                    break
             result['mx_record_count'] = mx_result['mx_record_count']
             result['mx_records'] = mx_result['mx_records']
             result['mx_check_status'] = mx_result['mx_check_status']
             if mx_result['mx_error']:
                 result['additional_checks']['mx_error'] = mx_result['mx_error']
-            
+
             # 3. SSL Certificate check (for HTTPS URLs)
             if parsed_url.scheme == 'https' or not parsed_url.scheme:
                 print("Performing SSL check...")
-                ssl_result = self.perform_ssl_check(domain)
-                
+                domains_to_try = ([selected_domain] if selected_domain else []) + [
+                    d for d in domain_variants if d != selected_domain
+                ]
+                ssl_result = None
+                for candidate in domains_to_try:
+                    ssl_candidate = self.perform_ssl_check(candidate)
+                    ssl_result = ssl_candidate
+                    if not ssl_candidate['ssl_error']:
+                        selected_domain = candidate
+                        break
+
                 result['ssl_valid'] = ssl_result['ssl_valid']
                 result['ssl_issuer'] = ssl_result['ssl_issuer']
                 result['ssl_expiry'] = ssl_result['ssl_expiry']
-                
+
                 if ssl_result['ssl_error']:
                     result['additional_checks']['ssl_error'] = ssl_result['ssl_error']
                 if ssl_result['ssl_version']:
                     result['additional_checks']['ssl_version'] = ssl_result['ssl_version']
                 if ssl_result['ssl_cipher']:
                     result['additional_checks']['ssl_cipher'] = ssl_result['ssl_cipher']
+
+            # Update domain with the successful variant for consistency
+            if selected_domain:
+                domain = selected_domain
             
             # 4. HTTP request for page title and status
             try:
