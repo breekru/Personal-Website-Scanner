@@ -964,8 +964,10 @@ class WebsiteVerificationTool:
             else:
                 changes_display = 'Not Scanned'
             
-            # Risk score display
-            if risk_score is None or (risk_score == 0 and status_code == 0):
+            # Risk score display with manual override
+            if manual_status == 'high_risk':
+                risk_display = '100/100'
+            elif risk_score is None or (risk_score == 0 and status_code == 0):
                 risk_display = 'Not Scanned'
             else:
                 risk_display = f"{risk_score}/100"
@@ -2289,6 +2291,23 @@ class WebsiteVerificationTool:
                 (status, website_id)
             )
             new_status = status
+
+            # If marking as high risk, also update the most recent scan
+            # result so its risk score reflects the manual override.
+            if status == 'high_risk':
+                cursor.execute(
+                    """
+                    UPDATE scan_results
+                    SET risk_score = 100
+                    WHERE id = (
+                        SELECT id FROM scan_results
+                        WHERE website_id = ?
+                        ORDER BY scan_date DESC
+                        LIMIT 1
+                    )
+                    """,
+                    (website_id,),
+                )
 
         conn.commit()
         conn.close()
